@@ -1,0 +1,124 @@
+# -*- coding: utf-8 -*-
+"""
+calculos.py — Lógica de cálculo epidemiológico.
+
+Adaptado del script de consola original (SEGUIMIENTO_EPIDEMIA.py):
+misma corrección de Rt (NaN en el primer día en vez de 0.0) y de
+"sumar Rt no tiene sentido, se promedia", pero ahora capaz de calcular
+todo agregado O desglosado por vía de contagio.
+"""
+from datetime import datetime
+import math
+from collections import defaultdict
+
+
+def _to_fecha(valor):
+    if isinstance(valor, str):
+        return datetime.strptime(valor[:10], "%Y-%m-%d").date()
+    return valor
+
+
+def recalcular_serie(registros: list[dict]) -> list[dict]:
+    """
+    Recibe una lista de registros de UNA sola serie (ya sea el agregado
+    total o una vía específica) y calcula casos_activos y rt_efectivo
+    para cada uno, en orden cronológico.
+    """
+    serie = sorted(registros, key=lambda r: _to_fecha(r["fecha"]))
+
+    acum_casos = acum_fallecidos = acum_recuperados = 0
+    resultado = []
+
+    for i, r in enumerate(serie):
+        acum_casos += r["casos_nuevos"]
+        acum_fallecidos += r["fallecidos"]
+        acum_recuperados += r["recuperados"]
+
+        casos_activos = max(0, acum_casos - acum_fallecidos - acum_recuperados)
+
+        if i > 0:
+            anterior = resultado[i - 1]["casos_activos"]
+            rt = (casos_activos / anterior) if anterior > 0 else 0.0
+        else:
+            rt = float("nan")  # No definido: no hay día anterior con qué comparar
+
+        resultado.append({
+            **r,
+            "casos_activos": casos_activos,
+            "rt_efectivo": rt,
+        })
+
+    return resultado
+
+
+def recalcular_por_via(registros: list[dict]) -> dict[str, list[dict]]:
+    """Agrupa por vía de contagio y recalcula cada serie por separado,
+    además del agregado total bajo la llave 'TOTAL'."""
+    por_via = defaultdict(list)
+    for r in registros:
+        nombre_via = (r.get("vias_contagio") or {}).get("nombre", "Sin vía")
+        por_via[nombre_via].append(r)
+
+    resultado = {via: recalcular_serie(regs) for via, regs in por_via.items()}
+    resultado["TOTAL"] = recalcular_serie(registros)
+    return resultado
+
+
+def tasa_crecimiento_y_duplicacion(serie: list[dict]) -> dict:
+    """
+    Calcula la tasa de crecimiento instantánea r = ln(C_t / C_t-1) sobre
+    casos activos, y el tiempo de duplicación T_d = ln(2)/r.
+    Es la forma más directa y explicable de "velocidad de transmisión".
+    """
+    activos = [r["casos_activos"] for r in serie if r["casos_activos"] is not None]
+    activos = [a for a in activos if a > 0]
+
+    if len(activos) < 2:
+        return {"tasa_r": None, "dias_duplicacion": None}
+
+    tasas = []
+    for i in range(1, len(activos)):
+        if activos[i - 1] > 0:
+            tasas.append(math.log(activos[i] / activos[i - 1]))
+
+    if not tasas:
+        return {"tasa_r": None, "dias_duplicacion": None}
+
+    r_prom = sum(tasas) / len(tasas)
+    dias_dup = (math.log(2) / r_prom) if r_prom > 0 else None
+
+    return {"tasa_r": r_prom, "dias_duplicacion": dias_dup}
+
+
+def agregar_casos_por_ubicacion(registros: list[dict]) -> list[dict]:
+    """
+    Suma los casos nuevos por ubicación (para el mapa de burbujas).
+    Ignora registros sin ubicación asignada. El nombre mostrado usa el
+    nivel más específico disponible (barrio > ciudad > departamento > país).
+    """
+    acumulado: dict[int, dict] = {}
+
+    for r in registros:
+        ubic = r.get("ubicaciones")
+        if not ubic or ubic.get("latitud") is None or ubic.get("longitud") is None:
+            continue
+
+        clave = (ubic["latitud"], ubic["longitud"])
+        if clave not in acumulado:
+            nombre = ubic.get("barrio") or ubic.get("ciudad") or ubic.get("departamento") or ubic.get("pais")
+            etiqueta_completa = ", ".join(
+                p for p in [ubic.get("barrio"), ubic.get("ciudad"), ubic.get("departamento"), ubic.get("pais")] if p
+            )
+            acumulado[clave] = {
+                "nombre": nombre,
+                "etiqueta_completa": etiqueta_completa,
+                "latitud": ubic["latitud"],
+                "longitud": ubic["longitud"],
+                "casos_totales": 0,
+                "fallecidos_totales": 0,
+            }
+
+        acumulado[clave]["casos_totales"] += r["casos_nuevos"]
+        acumulado[clave]["fallecidos_totales"] += r["fallecidos"]
+
+    return list(acumulado.values())
