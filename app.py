@@ -17,7 +17,7 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
-from streamlit_cookies_manager import EncryptedCookieManager
+import extra_streamlit_components as stx
 
 import db
 import calculos
@@ -29,20 +29,28 @@ st.set_page_config(page_title="Seguimiento de Epidemia", page_icon="🦠", layou
 
 # ---------------------------------------------------------------------
 # Cookies (persistencia de sesión entre refrescos del navegador)
+#
+# Nota: a diferencia de streamlit-cookies-manager (descontinuado, rompe
+# con Streamlit reciente porque usa st.cache), extra-streamlit-components
+# no cifra el contenido de la cookie en el navegador. Esto es aceptable
+# aquí porque lo que guardamos son los tokens de sesión de Supabase
+# (JWT firmados y de corta duración, no la contraseña), el mismo tipo
+# de dato que casi cualquier app guarda en una cookie de sesión.
 # ---------------------------------------------------------------------
-cookies = EncryptedCookieManager(
-    prefix="seguimiento_epidemia/",
-    password=st.secrets.get("COOKIE_PASSWORD", "cambia-esta-clave-en-secrets"),
-)
-if not cookies.ready():
-    st.stop()
+@st.cache_resource(experimental_allow_widgets=True)
+def get_cookie_manager():
+    return stx.CookieManager()
+
+
+cookie_manager = get_cookie_manager()
+_cookies_actuales = cookie_manager.get_all() or {}
 
 
 def _restaurar_sesion_desde_cookie():
     if "usuario" in st.session_state:
         return
-    access_token = cookies.get("access_token")
-    refresh_token = cookies.get("refresh_token")
+    access_token = _cookies_actuales.get("access_token")
+    refresh_token = _cookies_actuales.get("refresh_token")
     if access_token and refresh_token:
         try:
             db.set_auth_session(access_token, refresh_token)
@@ -55,9 +63,8 @@ def _restaurar_sesion_desde_cookie():
                 }
         except Exception:
             # Token vencido o inválido: se limpia y se pide login de nuevo
-            cookies["access_token"] = ""
-            cookies["refresh_token"] = ""
-            cookies.save()
+            cookie_manager.delete("access_token", key="del_access_token_expirado")
+            cookie_manager.delete("refresh_token", key="del_refresh_token_expirado")
 
 
 _restaurar_sesion_desde_cookie()
@@ -87,10 +94,12 @@ def pantalla_login():
                     "email": respuesta.user.email,
                 }
                 if recordar:
-                    cookies["access_token"] = respuesta.session.access_token
-                    cookies["refresh_token"] = respuesta.session.refresh_token
-                    cookies.save()
-                sm_ = db  # no-op, evita lint de import sin uso en algunos linters
+                    cookie_manager.set(
+                        "access_token", respuesta.session.access_token, key="set_access_token"
+                    )
+                    cookie_manager.set(
+                        "refresh_token", respuesta.session.refresh_token, key="set_refresh_token"
+                    )
                 st.rerun()
             except Exception as e:
                 st.error(f"No se pudo iniciar sesión: {e}")
@@ -145,9 +154,8 @@ def barra_lateral_sesion():
         st.markdown(f"**Sesión:** {usuario['email']}")
         if st.button("Cerrar sesión"):
             db.cerrar_sesion()
-            cookies["access_token"] = ""
-            cookies["refresh_token"] = ""
-            cookies.save()
+            cookie_manager.delete("access_token", key="del_access_token_logout")
+            cookie_manager.delete("refresh_token", key="del_refresh_token_logout")
             del st.session_state["usuario"]
             st.rerun()
 
