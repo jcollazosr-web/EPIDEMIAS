@@ -90,6 +90,24 @@ def tasa_crecimiento_y_duplicacion(serie: list[dict]) -> dict:
     return {"tasa_r": r_prom, "dias_duplicacion": dias_dup}
 
 
+def comparar_velocidad_por_via(por_via: dict[str, list[dict]]) -> list[dict]:
+    """
+    Calcula, para cada vía (y el TOTAL), la tasa de crecimiento y los días
+    de duplicación — para poder verlas todas lado a lado y comparar cuál
+    se está expandiendo más rápido en la ventana actual.
+    """
+    resultado = []
+    for nombre_via, serie in por_via.items():
+        velocidad = tasa_crecimiento_y_duplicacion(serie)
+        resultado.append({
+            "via": nombre_via,
+            "tasa_r": velocidad["tasa_r"],
+            "dias_duplicacion": velocidad["dias_duplicacion"],
+            "casos_activos_actuales": serie[-1]["casos_activos"] if serie else 0,
+        })
+    return sorted(resultado, key=lambda r: (r["tasa_r"] is None, -(r["tasa_r"] or 0)))
+
+
 def agregar_casos_por_ubicacion(registros: list[dict]) -> list[dict]:
     """
     Suma los casos nuevos por ubicación (para el mapa de burbujas).

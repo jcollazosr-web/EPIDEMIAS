@@ -73,14 +73,26 @@ seguimiento_epidemia/
 └── README.md
 ```
 
+## Estado actual de los modelos predictivos
+
+- ✅ Regresión log-lineal con banda ±2σ
+- ✅ Crecimiento logístico (SIR/SEIR simplificado, sin necesitar población total)
+- ✅ ARIMA con intervalo de confianza del 95% (requiere 50+ días)
+- ✅ Clasificación de fase (aceleración/meseta/desaceleración) — **heurística
+  por ahora**, no un modelo de ML entrenado (ver `clasificacion.py` para el
+  razonamiento: no hay histórico de brotes etiquetados todavía para entrenar
+  un clasificador real)
+- ✅ Comparación de velocidad de transmisión entre vías
+- ✅ Exportación a Excel de la tabla histórica
+
 ## Próximos pasos sugeridos
 
-1. Implementar el ajuste real de cada modelo (regresión log-lineal, SIR/SEIR,
-   Holt, ARIMA) como funciones que reciben la ventana de 15 días
-   (`db.obtener_registros_ultimos_n_dias`) y devuelven la proyección.
-2. Implementar el modelo de ML de clasificación de fase, entrenado con
-   el histórico acumulado completo (no solo la ventana de 15 días).
-3. Añadir exportación de reportes (Excel/PDF) — reutilizable de tu
-   experiencia previa con Clinical Extractor Pro.
-4. Añadir gráfico comparativo de velocidad de transmisión entre vías
-   de contagio (ya calculada en `calculos.tasa_crecimiento_y_duplicacion`).
+1. Exportación a PDF (hoy solo Excel).
+2. Entrenar el clasificador de fase con ML real una vez acumules varios
+   brotes/periodos históricos ya resueltos (ver el umbral en
+   `sugerencia_modelos.UMBRAL_ML_POR_VIA`).
+3. hCaptcha en el registro (configuración manual en el dashboard de
+   Supabase: Authentication > Settings).
+4. Repositorio de GitHub en privado (Settings > Danger Zone > Change visibility).
+5. Considerar el plan Pro de Supabase y evitar que Streamlit Cloud
+   "duerma" la app, si el uso real empieza a ser constante.

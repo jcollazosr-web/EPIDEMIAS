@@ -76,6 +76,12 @@ def recuperar_password(email: str):
     return client.auth.reset_password_for_email(email)
 
 
+def cambiar_password(nueva_password: str):
+    """Cambia la contraseña del usuario ya autenticado en esta sesión."""
+    client = get_client()
+    return client.auth.update_user({"password": nueva_password})
+
+
 # ---------------------------------------------------------------------
 # Vías de contagio
 # ---------------------------------------------------------------------

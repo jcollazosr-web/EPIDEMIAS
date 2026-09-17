@@ -13,7 +13,9 @@ Los modelos predictivos en sí (regresión, SIR, ARIMA, ML) se conectan
 en un paso siguiente, como módulos separados que consumen
 `db.obtener_registros_ultimos_n_dias` / `db.obtener_registros`.
 """
-from datetime import date
+import io
+import os
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +24,7 @@ import extra_streamlit_components as stx
 import db
 import calculos
 import proyecciones
+import clasificacion
 import sugerencia_modelos as sm
 
 
@@ -111,6 +114,14 @@ def pantalla_login():
             acepta = st.checkbox("Acepto el tratamiento de mis datos personales (Ley 1581 de 2012)")
             enviado_r = st.form_submit_button("Crear cuenta")
 
+        with st.expander("Ver política de tratamiento de datos personales"):
+            ruta_privacidad = os.path.join(os.path.dirname(__file__), "PRIVACIDAD.md")
+            try:
+                with open(ruta_privacidad, encoding="utf-8") as f:
+                    st.markdown(f.read())
+            except FileNotFoundError:
+                st.caption("Documento no disponible en este momento.")
+
         if enviado_r:
             if password_r != password_r2:
                 st.error("Las contraseñas no coinciden.")
@@ -147,6 +158,24 @@ def barra_lateral_sesion():
     usuario = st.session_state["usuario"]
     with st.sidebar:
         st.markdown(f"**Sesión:** {usuario['email']}")
+
+        with st.expander("Cambiar contraseña"):
+            with st.form("form_cambiar_password"):
+                pw_nueva = st.text_input("Nueva contraseña (mínimo 6 caracteres)", type="password", key="pw_nueva")
+                pw_nueva2 = st.text_input("Confirmar nueva contraseña", type="password", key="pw_nueva2")
+                cambiar = st.form_submit_button("Actualizar contraseña")
+            if cambiar:
+                if pw_nueva != pw_nueva2:
+                    st.error("Las contraseñas no coinciden.")
+                elif len(pw_nueva) < 6:
+                    st.error("Debe tener al menos 6 caracteres.")
+                else:
+                    try:
+                        db.cambiar_password(pw_nueva)
+                        st.success("Contraseña actualizada.")
+                    except Exception as e:
+                        st.error(f"No se pudo actualizar: {e}")
+
         if st.button("Cerrar sesión"):
             db.cerrar_sesion()
             cookie_manager.delete("access_token", key="del_access_token_logout")
@@ -218,6 +247,36 @@ def seccion_captura_datos(usuario_id: str):
         st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')} — vía: {via_sel_nombre}")
         st.rerun()
 
+    seccion_editar_eliminar_registros(usuario_id)
+
+
+def seccion_editar_eliminar_registros(usuario_id: str):
+    with st.expander("Editar o eliminar registros existentes"):
+        registros = db.obtener_registros(usuario_id)
+        if not registros:
+            st.caption("No hay registros todavía.")
+            return
+
+        registros_recientes = sorted(registros, key=lambda r: r["fecha"], reverse=True)[:30]
+
+        for r in registros_recientes:
+            nombre_via = (r.get("vias_contagio") or {}).get("nombre", "Sin vía")
+            nombre_ubic = (r.get("ubicaciones") or {}).get("ciudad") or "Sin ubicación"
+            fecha_legible = pd.to_datetime(r["fecha"]).strftime("%d/%m/%Y")
+
+            c1, c2, c3 = st.columns([3, 1, 1])
+            c1.markdown(
+                f"**{fecha_legible}** — {nombre_via} — {nombre_ubic} — "
+                f"Nuevos: {r['casos_nuevos']} · Fallecidos: {r['fallecidos']} · Recuperados: {r['recuperados']}"
+            )
+            if c2.button("🗑️ Eliminar", key=f"del_{r['id']}"):
+                db.eliminar_registro(r["id"])
+                st.rerun()
+            c3.caption("Para corregir: guarda un nuevo registro con la misma fecha/vía/ubicación arriba — se actualiza solo.")
+
+        if len(registros) > 30:
+            st.caption(f"Mostrando los 30 más recientes de {len(registros)} registros totales.")
+
 
 def seccion_tabla_y_resumen(usuario_id: str):
     st.subheader("Histórico de la epidemia")
@@ -243,7 +302,17 @@ def seccion_tabla_y_resumen(usuario_id: str):
         else:
             st.caption(f"Ninguna vía alcanza aún los {sm.UMBRAL_ML_POR_VIA} registros necesarios para ML por vía.")
 
-    por_via = calculos.recalcular_por_via(registros)
+    # Filtro de fechas
+    fechas_todas = sorted({pd.to_datetime(r["fecha"]).date() for r in registros})
+    c_desde, c_hasta = st.columns(2)
+    fecha_desde = c_desde.date_input("Desde", value=fechas_todas[0], key="filtro_desde")
+    fecha_hasta = c_hasta.date_input("Hasta", value=fechas_todas[-1], key="filtro_hasta")
+    registros_filtrados = [
+        r for r in registros
+        if fecha_desde <= pd.to_datetime(r["fecha"]).date() <= fecha_hasta
+    ]
+
+    por_via = calculos.recalcular_por_via(registros_filtrados)
 
     opciones_vista = ["TOTAL"] + [k for k in por_via.keys() if k != "TOTAL"]
     vista_sel = st.selectbox("Ver serie:", options=opciones_vista)
@@ -259,30 +328,75 @@ def seccion_tabla_y_resumen(usuario_id: str):
         })
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
 
+        buffer_excel = io.BytesIO()
+        with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
+            df_mostrar.to_excel(writer, index=False, sheet_name=vista_sel[:31])
+        st.download_button(
+            "📥 Exportar esta tabla a Excel",
+            data=buffer_excel.getvalue(),
+            file_name=f"seguimiento_epidemia_{vista_sel}_{date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     velocidad = calculos.tasa_crecimiento_y_duplicacion(serie)
-    c1, c2 = st.columns(2)
-    if velocidad["tasa_r"] is not None:
-        c1.metric("Tasa de crecimiento diaria (r)", f"{velocidad['tasa_r']:.3f}")
-    else:
-        c1.metric("Tasa de crecimiento diaria (r)", "N/D")
-    if velocidad["dias_duplicacion"] is not None:
-        c2.metric("Días para duplicar casos activos", f"{velocidad['dias_duplicacion']:.1f}")
-    else:
-        c2.metric("Días para duplicar casos activos", "N/D")
+    fase = clasificacion.clasificar_fase_heuristica(velocidad["tasa_r"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tasa de crecimiento diaria (r)", f"{velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "N/D")
+    c2.metric("Días para duplicar casos activos", f"{velocidad['dias_duplicacion']:.1f}" if velocidad["dias_duplicacion"] is not None else "N/D")
+    c3.metric("Fase estimada", f"{fase['color']} {fase['fase']}")
+    st.caption(
+        "La fase se calcula con una regla estadística directa sobre la tasa de crecimiento "
+        "(no un modelo de Machine Learning entrenado — ver clasificacion.py para el porqué)."
+    )
 
     if not df.empty and len(df) >= 2:
         st.line_chart(df.set_index("Fecha" if "Fecha" in df.columns else "fecha")[["casos_activos"]]
                        if "casos_activos" in df.columns else df.set_index("fecha")[["casos_activos"]])
 
+    if len(por_via) > 2:  # más de TOTAL + 1 vía
+        seccion_comparacion_vias(por_via)
+
     seccion_proyeccion(serie, vista_sel)
 
 
+def seccion_comparacion_vias(por_via: dict):
+    st.markdown("#### Comparación de velocidad de transmisión entre vías")
+    comparacion = calculos.comparar_velocidad_por_via(por_via)
+    df_comp = pd.DataFrame(comparacion)
+    df_comp_mostrar = df_comp.rename(columns={
+        "via": "Vía", "tasa_r": "Tasa de crecimiento (r)",
+        "dias_duplicacion": "Días para duplicar", "casos_activos_actuales": "Casos activos actuales",
+    })
+    st.dataframe(df_comp_mostrar.round(3), use_container_width=True, hide_index=True)
+    st.caption("Ordenado de mayor a menor velocidad de crecimiento. TOTAL incluye todas las vías juntas.")
+
+
 def seccion_proyeccion(serie: list[dict], nombre_serie: str):
-    st.markdown("#### Proyección a futuro (±2 desviaciones estándar)")
+    st.markdown("#### Proyección a futuro")
 
+    n_dias_disponibles = len([r for r in serie if r.get("casos_activos") is not None])
+    opciones_modelo = ["Regresión log-lineal (±2σ)"]
+    if n_dias_disponibles >= 8:
+        opciones_modelo.append("Crecimiento logístico (SIR simplificado)")
+    if n_dias_disponibles >= 50:
+        opciones_modelo.append("ARIMA (95% de confianza)")
+
+    modelo_sel = st.selectbox("Modelo de proyección", options=opciones_modelo, key=f"modelo_{nombre_serie}")
     dias_futuros = st.slider("Días a proyectar", min_value=3, max_value=14, value=7, key=f"slider_{nombre_serie}")
-    resultado = proyecciones.proyectar_regresion_log_lineal(serie, dias_futuros=dias_futuros)
 
+    if modelo_sel.startswith("Regresión"):
+        resultado = proyecciones.proyectar_regresion_log_lineal(serie, dias_futuros=dias_futuros)
+        _mostrar_proyeccion_con_banda(serie, resultado, "Tasa de crecimiento diaria estimada (regresión)", "tasa_crecimiento_diaria")
+    elif modelo_sel.startswith("ARIMA"):
+        resultado = proyecciones.ajustar_arima(serie, dias_futuros=dias_futuros)
+        _mostrar_proyeccion_con_banda(serie, resultado, None, None)
+    else:
+        resultado = proyecciones.ajustar_crecimiento_logistico(serie, dias_futuros=dias_futuros)
+        _mostrar_proyeccion_logistica(resultado)
+
+
+def _mostrar_proyeccion_con_banda(serie: list[dict], resultado: dict, etiqueta_metrica, campo_metrica):
     if not resultado["valido"]:
         st.warning(resultado["mensaje"])
         return
@@ -290,12 +404,11 @@ def seccion_proyeccion(serie: list[dict], nombre_serie: str):
     st.caption(resultado["mensaje"])
 
     df_hist = pd.DataFrame([
-        {"fecha": r["fecha"], "tipo": "Histórico", "valor": r["casos_activos"],
-         "limite_inferior": None, "limite_superior": None}
+        {"fecha": r["fecha"], "valor": r["casos_activos"]}
         for r in serie if r.get("casos_activos") is not None
     ])
     df_proy = pd.DataFrame([
-        {"fecha": p["fecha"], "tipo": "Proyección", "valor": p["valor_central"],
+        {"fecha": p["fecha"], "valor": p["valor_central"],
          "limite_inferior": p["limite_inferior"], "limite_superior": p["limite_superior"]}
         for p in resultado["proyeccion"]
     ])
@@ -319,17 +432,41 @@ def seccion_proyeccion(serie: list[dict], nombre_serie: str):
     except ImportError:
         st.info("Instala 'altair' (incluido con Streamlit) para ver el gráfico de banda de incertidumbre.")
 
-    c1, c2 = st.columns(2)
-    c1.metric("Tasa de crecimiento diaria estimada (regresión)", f"{resultado['tasa_crecimiento_diaria']:.3f}")
-    c2.metric("Días con datos usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
+    if etiqueta_metrica and campo_metrica in resultado:
+        c1, c2 = st.columns(2)
+        c1.metric(etiqueta_metrica, f"{resultado[campo_metrica]:.3f}")
+        c2.metric("Días con datos usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
+    else:
+        st.metric("Días con datos usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
 
     df_tabla_proy = pd.DataFrame(resultado["proyeccion"])
     df_tabla_proy["fecha"] = pd.to_datetime(df_tabla_proy["fecha"]).dt.strftime("%d/%m/%Y")
     df_tabla_proy = df_tabla_proy.rename(columns={
         "fecha": "Fecha", "valor_central": "Proyección central",
-        "limite_inferior": "Límite inferior (-2σ)", "limite_superior": "Límite superior (+2σ)",
+        "limite_inferior": "Límite inferior", "limite_superior": "Límite superior",
     })
     st.dataframe(df_tabla_proy.round(1), use_container_width=True, hide_index=True)
+
+
+def _mostrar_proyeccion_logistica(resultado: dict):
+    if not resultado["valido"]:
+        st.warning(resultado["mensaje"])
+        return
+
+    st.caption(resultado["mensaje"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("K (techo estimado de casos acumulados)", f"{resultado['K_techo_estimado']:.0f}")
+    c2.metric("r (tasa de crecimiento)", f"{resultado['r_tasa_crecimiento']:.3f}")
+    c3.metric("Días usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
+
+    df_proy = pd.DataFrame(resultado["proyeccion"])
+    df_proy["fecha"] = pd.to_datetime(df_proy["fecha"]).dt.strftime("%d/%m/%Y")
+    df_proy = df_proy.rename(columns={
+        "fecha": "Fecha", "casos_acumulados_proyectados": "Casos acumulados proyectados",
+        "casos_nuevos_proyectados": "Casos nuevos proyectados",
+    })
+    st.dataframe(df_proy.round(1), use_container_width=True, hide_index=True)
 
 
 def seccion_mapa(usuario_id: str):
