@@ -37,12 +37,7 @@ st.set_page_config(page_title="Seguimiento de Epidemia", page_icon="🦠", layou
 # (JWT firmados y de corta duración, no la contraseña), el mismo tipo
 # de dato que casi cualquier app guarda en una cookie de sesión.
 # ---------------------------------------------------------------------
-@st.cache_resource(experimental_allow_widgets=True)
-def get_cookie_manager():
-    return stx.CookieManager()
-
-
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager()
 _cookies_actuales = cookie_manager.get_all() or {}
 
 
