@@ -34,24 +34,7 @@ def get_client() -> Client:
     return create_client(url, key)
 
 
-@st.cache_resource
-def get_admin_client() -> Client:
-    """
-    Cliente con la SERVICE ROLE KEY de Supabase: bypasea RLS por completo.
-    Úsalo ÚNICAMENTE detrás de una verificación de rol == 'admin' hecha
-    con el cliente normal (que sí respeta RLS). Nunca expongas esta key
-    al navegador — en Streamlit es seguro guardarla en st.secrets porque
-    la app corre del lado del servidor, pero nunca la imprimas en pantalla
-    ni la subas a un repositorio.
-    """
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL"))
-    service_key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
-    if not url or not service_key:
-        raise RuntimeError(
-            "Falta SUPABASE_SERVICE_ROLE_KEY. Solo es necesaria para el panel "
-            "de administrador — no se requiere para el uso normal de la app."
-        )
-    return create_client(url, service_key)
+def set_auth_session(access_token: str, refresh_token: str) -> None:
     """Aplica el token de sesión del usuario autenticado al cliente,
     para que las políticas RLS (auth.uid()) funcionen en cada consulta."""
     client = get_client()
@@ -284,53 +267,24 @@ def obtener_o_crear_ubicacion(
 
 
 # ---------------------------------------------------------------------
-# Panel de administrador (requiere rol == 'admin', verificado ANTES de
-# usar el cliente con service role key)
+# Panel de administrador (requiere rol == 'admin').
+#
+# En vez de una service_role key (que anula RLS por completo y sería
+# riesgoso exponer en la app), usamos funciones de Postgres que
+# verifican el rol INTERNAMENTE (ver admin_estadisticas_globales y
+# admin_listar_usuarios en schema.sql). El cliente normal (anon) puede
+# llamarlas porque Postgres, no el código de la app, hace el chequeo.
 # ---------------------------------------------------------------------
 def estadisticas_globales_admin() -> dict:
-    """
-    Estadísticas agregadas de TODA la app (todos los usuarios).
-    Usa el cliente con service_role key porque RLS bloquea intencionalmente
-    ver datos de otros usuarios con el cliente normal. Llamar SOLO después
-    de confirmar es_admin(usuario_id_actual) con el cliente normal.
-    """
-    admin = get_admin_client()
-
-    perfiles = admin.table("perfiles").select("usuario_id", count="exact").execute()
-    total_usuarios = perfiles.count if perfiles.count is not None else len(perfiles.data or [])
-
-    registros = admin.table("registros_diarios").select(
-        "usuario_id, fecha, casos_nuevos, fallecidos, recuperados"
-    ).execute().data or []
-
-    total_casos = sum(r["casos_nuevos"] for r in registros)
-    total_fallecidos = sum(r["fallecidos"] for r in registros)
-    usuarios_con_datos = len({r["usuario_id"] for r in registros})
-
-    from datetime import date, timedelta
-    hace_7_dias = (date.today() - timedelta(days=7)).isoformat()
-    usuarios_activos_7d = len({r["usuario_id"] for r in registros if str(r["fecha"]) >= hace_7_dias})
-
-    return {
-        "total_usuarios_registrados": total_usuarios,
-        "usuarios_con_al_menos_un_registro": usuarios_con_datos,
-        "usuarios_activos_ultimos_7_dias": usuarios_activos_7d,
-        "total_registros_capturados": len(registros),
-        "total_casos_nuevos_acumulados": total_casos,
-        "total_fallecidos_acumulados": total_fallecidos,
-    }
+    """Llama a la función admin_estadisticas_globales() vía RPC.
+    Si el usuario no tiene rol admin, Postgres rechaza la llamada."""
+    client = get_client()
+    res = client.rpc("admin_estadisticas_globales", {}).execute()
+    return res.data or {}
 
 
 def listar_usuarios_admin() -> list[dict]:
-    """Lista básica de usuarios (correo, fecha de registro, rol) para el
-    panel de administrador. Requiere la Admin API de Supabase Auth."""
-    admin = get_admin_client()
-    resultado = admin.auth.admin.list_users()
-    usuarios = []
-    for u in resultado:
-        usuarios.append({
-            "email": u.email,
-            "creado_en": u.created_at,
-            "confirmado": u.email_confirmed_at is not None,
-        })
-    return usuarios
+    """Llama a la función admin_listar_usuarios() vía RPC."""
+    client = get_client()
+    res = client.rpc("admin_listar_usuarios", {}).execute()
+    return res.data or []

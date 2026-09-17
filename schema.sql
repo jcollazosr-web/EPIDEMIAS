@@ -197,3 +197,62 @@ create trigger trg_crear_perfil
 -- el rol (no pasa por RLS ni por el trigger de arriba de la misma forma
 -- que un usuario final).
 -- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- 6. Funciones del panel de administrador (sin usar service_role key)
+--
+-- Estas funciones corren con privilegios elevados (SECURITY DEFINER)
+-- pero verifican INTERNAMENTE que quien llama tiene rol 'admin' antes
+-- de devolver nada. Así el panel de administrador funciona con la
+-- clave pública (anon), sin necesidad de exponer nunca la service_role
+-- key dentro de la app.
+-- ---------------------------------------------------------------------
+create or replace function admin_estadisticas_globales()
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    es_admin boolean;
+    resultado json;
+begin
+    select (rol = 'admin') into es_admin from perfiles where usuario_id = auth.uid();
+    if not coalesce(es_admin, false) then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+
+    select json_build_object(
+        'total_usuarios_registrados', (select count(*) from perfiles),
+        'usuarios_con_al_menos_un_registro', (select count(distinct usuario_id) from registros_diarios),
+        'usuarios_activos_ultimos_7_dias', (select count(distinct usuario_id) from registros_diarios where fecha >= current_date - interval '7 days'),
+        'total_registros_capturados', (select count(*) from registros_diarios),
+        'total_casos_nuevos_acumulados', (select coalesce(sum(casos_nuevos),0) from registros_diarios),
+        'total_fallecidos_acumulados', (select coalesce(sum(fallecidos),0) from registros_diarios)
+    ) into resultado;
+
+    return resultado;
+end;
+$$;
+
+grant execute on function admin_estadisticas_globales() to authenticated;
+
+create or replace function admin_listar_usuarios()
+returns table(email text, creado_en timestamptz, confirmado boolean)
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+    if not exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+
+    return query
+    select u.email, u.created_at, (u.email_confirmed_at is not null)
+    from auth.users u
+    order by u.created_at;
+end;
+$$;
+
+grant execute on function admin_listar_usuarios() to authenticated;
