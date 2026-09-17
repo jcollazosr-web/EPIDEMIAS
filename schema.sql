@@ -5,6 +5,26 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
+-- 0. Brotes (permite hacerle seguimiento a varias epidemias en paralelo,
+--    en vez de una sola línea de tiempo continua)
+-- ---------------------------------------------------------------------
+create table if not exists brotes (
+    id           bigint generated always as identity primary key,
+    usuario_id   uuid references auth.users(id) on delete cascade not null,
+    nombre       text not null,
+    descripcion  text,
+    creado_en    timestamptz default now()
+);
+
+alter table brotes enable row level security;
+
+create policy "brotes_solo_propios"
+    on brotes
+    for all
+    using (auth.uid() = usuario_id)
+    with check (auth.uid() = usuario_id);
+
+-- ---------------------------------------------------------------------
 -- 1. Catálogo de vías de contagio (editable por el usuario desde la app)
 -- ---------------------------------------------------------------------
 create table if not exists vias_contagio (
@@ -56,6 +76,7 @@ create policy "ubicaciones_solo_propias"
 create table if not exists registros_diarios (
     id              bigint generated always as identity primary key,
     usuario_id      uuid references auth.users(id) on delete cascade not null,
+    brote_id        bigint references brotes(id) on delete cascade,
     fecha           date not null,
     via_contagio_id bigint references vias_contagio(id) on delete set null,
     ubicacion_id    bigint references ubicaciones(id) on delete set null,
@@ -65,11 +86,14 @@ create table if not exists registros_diarios (
     creado_en       timestamptz default now(),
     actualizado_en  timestamptz default now(),
 
-    -- Un usuario no puede tener dos registros para la misma fecha,
-    -- la misma vía Y la misma ubicación (evita duplicados accidentales,
-    -- pero permite varias ubicaciones el mismo día para la misma vía)
-    unique (usuario_id, fecha, via_contagio_id, ubicacion_id)
+    -- Un usuario no puede tener dos registros para la misma fecha, vía,
+    -- ubicación Y brote (evita duplicados, pero permite el mismo día en
+    -- brotes distintos o vías/ubicaciones distintas)
+    unique (usuario_id, fecha, via_contagio_id, ubicacion_id, brote_id)
 );
+
+create index if not exists idx_registros_brote
+    on registros_diarios (brote_id);
 
 create index if not exists idx_registros_usuario_fecha
     on registros_diarios (usuario_id, fecha);
@@ -249,7 +273,7 @@ begin
     end if;
 
     return query
-    select u.email, u.created_at, (u.email_confirmed_at is not null)
+    select u.email::text, u.created_at, (u.email_confirmed_at is not null)
     from auth.users u
     order by u.created_at;
 end;

@@ -83,6 +83,38 @@ def cambiar_password(nueva_password: str):
 
 
 # ---------------------------------------------------------------------
+# Brotes (permite hacerle seguimiento a varias epidemias en paralelo)
+# ---------------------------------------------------------------------
+def listar_brotes(usuario_id: str) -> list[dict]:
+    client = get_client()
+    res = client.table("brotes").select("*").eq("usuario_id", usuario_id).order("creado_en").execute()
+    return res.data or []
+
+
+def crear_brote(usuario_id: str, nombre: str, descripcion: str = "") -> dict:
+    client = get_client()
+    res = client.table("brotes").insert({
+        "usuario_id": usuario_id, "nombre": nombre.strip(), "descripcion": descripcion.strip() or None,
+    }).execute()
+    return res.data[0] if res.data else {}
+
+
+def eliminar_brote(brote_id: int) -> None:
+    """Elimina el brote Y todos sus registros (por ON DELETE CASCADE)."""
+    client = get_client()
+    client.table("brotes").delete().eq("id", brote_id).execute()
+
+
+def asegurar_brote_por_defecto(usuario_id: str) -> dict:
+    """Si el usuario no tiene ningún brote todavía, le crea uno inicial
+    para que la app nunca quede sin un brote activo que seleccionar."""
+    brotes = listar_brotes(usuario_id)
+    if brotes:
+        return brotes[0]
+    return crear_brote(usuario_id, "Brote 1", "Creado automáticamente")
+
+
+# ---------------------------------------------------------------------
 # Vías de contagio
 # ---------------------------------------------------------------------
 def listar_vias(usuario_id: str) -> list[dict]:
@@ -118,30 +150,32 @@ def asegurar_vias_por_defecto(usuario_id: str) -> None:
 # ---------------------------------------------------------------------
 # Registros diarios
 # ---------------------------------------------------------------------
-def obtener_registros(usuario_id: str) -> list[dict]:
-    """Trae todos los registros del usuario, con el nombre de la vía
-    y la ubicación ya resueltos (join), ordenados por fecha."""
+def obtener_registros(usuario_id: str, brote_id: Optional[int] = None) -> list[dict]:
+    """Trae los registros del usuario (opcionalmente filtrados a un solo
+    brote), con el nombre de la vía y la ubicación ya resueltos (join)."""
     client = get_client()
-    res = (
+    query = (
         client.table("registros_diarios")
         .select("*, vias_contagio(nombre), ubicaciones(pais, departamento, ciudad, barrio, latitud, longitud)")
         .eq("usuario_id", usuario_id)
-        .order("fecha")
-        .execute()
     )
+    if brote_id is not None:
+        query = query.eq("brote_id", brote_id)
+    res = query.order("fecha").execute()
     return res.data or []
 
 
-def obtener_registros_ultimos_n_dias(usuario_id: str, n_dias: int = 15) -> list[dict]:
+def obtener_registros_ultimos_n_dias(usuario_id: str, brote_id: Optional[int] = None, n_dias: int = 15) -> list[dict]:
     """Ventana móvil de entrenamiento: últimos N días con datos,
     usada por los modelos convencionales (regresión, SIR, etc.)."""
-    todos = obtener_registros(usuario_id)
+    todos = obtener_registros(usuario_id, brote_id=brote_id)
     fechas_unicas = sorted({r["fecha"] for r in todos}, reverse=True)[:n_dias]
     return [r for r in todos if r["fecha"] in fechas_unicas]
 
 
 def upsert_registro(
     usuario_id: str,
+    brote_id: int,
     fecha: date,
     via_contagio_id: Optional[int],
     casos_nuevos: int,
@@ -149,11 +183,12 @@ def upsert_registro(
     recuperados: int,
     ubicacion_id: Optional[int] = None,
 ) -> dict:
-    """Inserta o actualiza (según la restricción UNIQUE fecha+vía+ubicación)
-    el registro de un día para una vía de contagio y ubicación específicas."""
+    """Inserta o actualiza (según la restricción UNIQUE fecha+vía+ubicación+brote)
+    el registro de un día para un brote, vía de contagio y ubicación específicos."""
     client = get_client()
     payload = {
         "usuario_id": usuario_id,
+        "brote_id": brote_id,
         "fecha": fecha.isoformat(),
         "via_contagio_id": via_contagio_id,
         "ubicacion_id": ubicacion_id,
@@ -163,10 +198,62 @@ def upsert_registro(
     }
     res = (
         client.table("registros_diarios")
-        .upsert(payload, on_conflict="usuario_id,fecha,via_contagio_id,ubicacion_id")
+        .upsert(payload, on_conflict="usuario_id,fecha,via_contagio_id,ubicacion_id,brote_id")
         .execute()
     )
     return res.data[0] if res.data else {}
+
+
+def importar_registros_masivo(usuario_id: str, brote_id: int, filas: list[dict]) -> dict:
+    """
+    Inserta muchos registros de una vez (carga desde Excel/CSV).
+    Cada fila en `filas` debe traer: fecha (date), via_nombre (str, opcional),
+    ubicacion (dict opcional con pais/departamento/ciudad/barrio),
+    casos_nuevos, fallecidos, recuperados.
+
+    Reutiliza/crea vías y ubicaciones automáticamente por nombre, igual que
+    el formulario manual, para no duplicar catálogos.
+    """
+    exitosos, fallidos = 0, []
+    cache_vias: dict[str, int] = {}
+
+    for i, fila in enumerate(filas):
+        try:
+            via_nombre = (fila.get("via_nombre") or "").strip()
+            via_id = None
+            if via_nombre:
+                if via_nombre not in cache_vias:
+                    existentes = {v["nombre"]: v["id"] for v in listar_vias(usuario_id)}
+                    if via_nombre not in existentes:
+                        crear_via(usuario_id, via_nombre)
+                        existentes = {v["nombre"]: v["id"] for v in listar_vias(usuario_id)}
+                    cache_vias[via_nombre] = existentes.get(via_nombre)
+                via_id = cache_vias[via_nombre]
+
+            ubicacion_id = None
+            ubic = fila.get("ubicacion")
+            if ubic and ubic.get("pais"):
+                u = obtener_o_crear_ubicacion(
+                    usuario_id, ubic.get("pais", ""), ubic.get("departamento", ""),
+                    ubic.get("ciudad", ""), ubic.get("barrio", ""),
+                )
+                ubicacion_id = u.get("id")
+
+            upsert_registro(
+                usuario_id=usuario_id,
+                brote_id=brote_id,
+                fecha=fila["fecha"],
+                via_contagio_id=via_id,
+                ubicacion_id=ubicacion_id,
+                casos_nuevos=int(fila.get("casos_nuevos", 0)),
+                fallecidos=int(fila.get("fallecidos", 0)),
+                recuperados=int(fila.get("recuperados", 0)),
+            )
+            exitosos += 1
+        except Exception as e:
+            fallidos.append({"fila": i + 1, "error": str(e)})
+
+    return {"exitosos": exitosos, "fallidos": fallidos}
 
 
 def eliminar_registro(registro_id: int) -> None:
@@ -174,12 +261,12 @@ def eliminar_registro(registro_id: int) -> None:
     client.table("registros_diarios").delete().eq("id", registro_id).execute()
 
 
-def contar_registros_totales(usuario_id: str) -> int:
-    return len(obtener_registros(usuario_id))
+def contar_registros_totales(usuario_id: str, brote_id: Optional[int] = None) -> int:
+    return len(obtener_registros(usuario_id, brote_id=brote_id))
 
 
-def contar_registros_por_via(usuario_id: str) -> dict[str, int]:
-    registros = obtener_registros(usuario_id)
+def contar_registros_por_via(usuario_id: str, brote_id: Optional[int] = None) -> dict[str, int]:
+    registros = obtener_registros(usuario_id, brote_id=brote_id)
     conteo: dict[str, int] = {}
     for r in registros:
         nombre_via = (r.get("vias_contagio") or {}).get("nombre", "Sin vía")

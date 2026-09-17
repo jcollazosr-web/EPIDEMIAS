@@ -73,6 +73,25 @@ seguimiento_epidemia/
 └── README.md
 ```
 
+## Novedades de esta versión
+
+- **Múltiples brotes**: cada usuario puede crear y llevar en paralelo tantas
+  epidemias (brotes) como quiera, cada una con su propia línea de tiempo,
+  vías y ubicaciones independientes. Selector en la barra lateral.
+- **Diseño rediseñado**: todos los controles de captura, carga y edición
+  viven en la barra lateral izquierda; el cuerpo principal es un dashboard
+  de solo lectura con gráficos interactivos (Plotly).
+- **Carga masiva desde Excel/CSV**: en la barra lateral, sube un archivo
+  con columnas `fecha, casos_nuevos, fallecidos, recuperados` (y
+  opcionalmente `via, pais, departamento, ciudad, barrio`).
+- **Colores de marca**: la interfaz usa la paleta del Manual de Identidad
+  Corporativa de la Fundación (`.streamlit/config.toml` + CSS inline).
+- **Botón de donación**: enlaza directamente al checkout de Bold de la
+  Fundación, visible en la barra lateral.
+- **Bug corregido**: `admin_listar_usuarios()` fallaba por una discrepancia
+  de tipos (`varchar` vs `text`) al leer `auth.users.email` — ya corregido
+  en la base de datos y en `schema.sql`.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

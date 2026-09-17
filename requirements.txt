@@ -5,6 +5,7 @@ numpy>=1.26
 scipy>=1.13
 statsmodels>=0.14
 altair>=5.0
+plotly>=5.22
 pydeck>=0.9
 requests>=2.32
 openpyxl>=3.1
