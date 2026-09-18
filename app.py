@@ -32,6 +32,7 @@ LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
 URL_BASE_APP = "https://epidemias-jmcr.streamlit.app"
 RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
 RUTA_LOGO_ICONO = os.path.join(os.path.dirname(__file__), "assets", "logo_icono.png")
+RUTA_LOGO_FAVICON = os.path.join(os.path.dirname(__file__), "assets", "logo_favicon.png")
 RUTA_ICONO_ROBOT = os.path.join(os.path.dirname(__file__), "assets", "robot_pensamiento.png")
 
 # Colores del manual de marca (Fundación Juan Manuel Collazos)
@@ -40,7 +41,7 @@ COLOR_VIOLETA = "#9e33b2"
 COLOR_CIAN = "#00d6ff"
 COLOR_AZUL_COMPLEMENTARIO = "#303896"
 
-st.set_page_config(page_title="EpiScan", page_icon=RUTA_LOGO_ICONO, layout="wide")
+st.set_page_config(page_title="EpiScan", page_icon=RUTA_LOGO_FAVICON, layout="wide")
 
 st.markdown(
     f"""
@@ -128,9 +129,9 @@ _restaurar_sesion_desde_cookie()
 # Pantalla de autenticación
 # ---------------------------------------------------------------------
 def pantalla_login():
-    col_logo, col_titulo = st.columns([1, 3])
+    col_logo, col_titulo = st.columns([2, 3])
     with col_logo:
-        st.image(RUTA_LOGO_ICONO, width=120)
+        st.image(RUTA_LOGO, width=260)
     with col_titulo:
         st.title("EpiScan")
         st.caption("Sistema de vigilancia epidemiológica")
