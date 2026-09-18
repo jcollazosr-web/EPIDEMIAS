@@ -5,6 +5,7 @@ de un brote, para descargar o enviar a terceros (junta directiva,
 entidad de salud, etc.).
 """
 import io
+import os
 from datetime import date
 
 import pandas as pd
@@ -15,6 +16,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 COLOR_AZUL_OSCURO = "#000d5c"
 COLOR_VIOLETA = "#9e33b2"
+RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
 
 
 def _generar_grafico_png(serie: list, tabla_proyeccion) -> bytes:
@@ -52,6 +54,13 @@ def generar_pdf_reporte(brote_nombre: str, serie: list, tabla_proyeccion=None, m
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
     story = []
+
+    if os.path.exists(RUTA_LOGO):
+        try:
+            story.append(Image(RUTA_LOGO, width=140, height=77))
+            story.append(Spacer(1, 8))
+        except Exception:
+            pass
 
     story.append(Paragraph("Reporte de Seguimiento Epidemiológico", styles["Title"]))
     story.append(Paragraph(f"Brote: {brote_nombre}", styles["Heading2"]))

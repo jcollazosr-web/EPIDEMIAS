@@ -25,9 +25,12 @@ import proyecciones
 import clasificacion
 import reportes
 import datos_oficiales
+import interpretacion
 import sugerencia_modelos as sm
 
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
+URL_BASE_APP = "https://epidemias-jmcr.streamlit.app"
+RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
 
 # Colores del manual de marca (Fundación Juan Manuel Collazos)
 COLOR_AZUL_OSCURO = "#000d5c"
@@ -35,7 +38,7 @@ COLOR_VIOLETA = "#9e33b2"
 COLOR_CIAN = "#00d6ff"
 COLOR_AZUL_COMPLEMENTARIO = "#303896"
 
-st.set_page_config(page_title="Seguimiento de Epidemia", page_icon="🦠", layout="wide")
+st.set_page_config(page_title="Seguimiento de Epidemia", page_icon=RUTA_LOGO, layout="wide")
 
 st.markdown(
     f"""
@@ -100,7 +103,11 @@ _restaurar_sesion_desde_cookie()
 # Pantalla de autenticación
 # ---------------------------------------------------------------------
 def pantalla_login():
-    st.title("🦠 Sistema de Seguimiento de Epidemia")
+    col_logo, col_titulo = st.columns([1, 3])
+    with col_logo:
+        st.image(RUTA_LOGO, width=180)
+    with col_titulo:
+        st.title("Sistema de Seguimiento de Epidemia")
     st.markdown(
         f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💙 Apoya a la Fundación Juan Manuel Collazos — Donar</a>',
         unsafe_allow_html=True,
@@ -175,7 +182,17 @@ def pantalla_login():
 # BARRA LATERAL — todo lo que es entrada/control de datos
 # =======================================================================
 def barra_lateral_sesion(usuario: dict):
+    st.image(RUTA_LOGO, use_container_width=True)
     st.markdown(f"**Sesión:** {usuario['email']}")
+
+    with st.expander("❓ Cómo usar esta app"):
+        ruta_manual = os.path.join(os.path.dirname(__file__), "MANUAL_DE_USO.md")
+        try:
+            with open(ruta_manual, encoding="utf-8") as f:
+                st.markdown(f.read())
+        except FileNotFoundError:
+            st.caption("Manual no disponible en este momento.")
+
     with st.expander("Cambiar contraseña"):
         with st.form("form_cambiar_password"):
             pw_nueva = st.text_input("Nueva contraseña (mínimo 6 caracteres)", type="password", key="pw_nueva")
@@ -255,8 +272,8 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
         with st.expander("🔗 Compartir públicamente"):
             st.caption("Genera un enlace de solo lectura, sin necesidad de iniciar sesión.")
             if brote.get("token_publico"):
-                url_publica = f"?token_publico={brote['token_publico']}"
-                st.text_input("Enlace (copia y pega la URL completa de la app + esto):", value=url_publica, key="url_publica_actual")
+                url_publica = f"{URL_BASE_APP}/?token_publico={brote['token_publico']}"
+                st.text_input("Enlace completo (cópialo y compártelo):", value=url_publica, key="url_publica_actual")
                 if st.button("Revocar enlace público"):
                     db.revocar_token_publico(brote["id"])
                     st.rerun()
@@ -287,9 +304,16 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
 
         with st.popover("+ Añadir nueva vía de contagio"):
             nueva_via = st.text_input("Nombre de la vía", key="nueva_via_input")
+            tipo_nueva_via = st.selectbox(
+                "Tipo de transmisión",
+                options=list(clasificacion.PERFILES_R0_POR_TIPO_VIA.keys()),
+                format_func=lambda k: clasificacion.PERFILES_R0_POR_TIPO_VIA[k]["etiqueta"],
+                key="tipo_nueva_via_input",
+                help="Se usa solo para sugerir un R0 de referencia en el estimador de subregistro — no cambia los cálculos de Rt ni las proyecciones.",
+            )
             if st.button("Guardar vía"):
                 if nueva_via.strip():
-                    db.crear_via(catalogo_id, nueva_via.strip())
+                    db.crear_via(catalogo_id, nueva_via.strip(), tipo=tipo_nueva_via)
                     st.rerun()
 
         st.caption("Ubicación (se geocodifica automáticamente con OpenStreetMap)")
@@ -334,55 +358,84 @@ def seccion_lateral_carga_masiva(usuario_id: str, brote: dict):
             "(fallecidos/recuperados opcionales, se asumen 0). Opcionales: "
             "**via, pais, departamento, ciudad, barrio**."
         )
-        archivo = st.file_uploader("Selecciona un archivo", type=["csv", "xlsx", "xls"], key="uploader_masivo")
+        modo = st.radio("Origen de los datos", ["Subir archivo", "Importar desde una URL pública (OMS, OPS, Datos Abiertos, etc.)"], key="modo_carga_masiva")
 
-        if archivo is not None:
-            try:
-                if archivo.name.endswith(".csv"):
-                    df_subida = pd.read_csv(archivo)
-                else:
-                    df_subida = pd.read_excel(archivo)
-            except Exception as e:
-                st.error(f"No se pudo leer el archivo: {e}")
-                return
+        df_subida = None
+        if modo == "Subir archivo":
+            archivo = st.file_uploader("Selecciona un archivo", type=["csv", "xlsx", "xls"], key="uploader_masivo")
+            if archivo is not None:
+                try:
+                    if archivo.name.endswith(".csv"):
+                        df_subida = pd.read_csv(archivo)
+                    else:
+                        df_subida = pd.read_excel(archivo)
+                except Exception as e:
+                    st.error(f"No se pudo leer el archivo: {e}")
+                    return
+        else:
+            st.caption(
+                "Pega el enlace directo a un archivo CSV o Excel público — por ejemplo, un "
+                "export de la OMS, la OPS, o cualquier portal de datos abiertos. La URL debe "
+                "apuntar DIRECTAMENTE al archivo (terminar en .csv o .xlsx), no a una página web."
+            )
+            url_datos = st.text_input("URL del archivo CSV/Excel", key="url_carga_masiva")
+            if url_datos and st.button("Descargar y previsualizar"):
+                try:
+                    resp = requests.get(url_datos, timeout=30)
+                    resp.raise_for_status()
+                    contenido = io.BytesIO(resp.content)
+                    if url_datos.lower().endswith(".csv"):
+                        df_subida = pd.read_csv(contenido)
+                    else:
+                        df_subida = pd.read_excel(contenido)
+                    st.session_state["_df_url_cache"] = df_subida
+                except Exception as e:
+                    st.error(f"No se pudo descargar o leer el archivo desde esa URL: {e}")
+                    return
+            elif "_df_url_cache" in st.session_state:
+                df_subida = st.session_state["_df_url_cache"]
 
-            df_subida.columns = [c.strip().lower() for c in df_subida.columns]
-            st.dataframe(df_subida.head(10), use_container_width=True)
+        if df_subida is None:
+            return
 
-            columnas_requeridas = {"fecha", "casos_nuevos"}
-            if not columnas_requeridas.issubset(set(df_subida.columns)):
-                st.error(f"Faltan columnas obligatorias: {columnas_requeridas - set(df_subida.columns)}")
-                return
+        df_subida.columns = [c.strip().lower() for c in df_subida.columns]
+        st.dataframe(df_subida.head(10), use_container_width=True)
 
-            if st.button(f"Importar {len(df_subida)} filas a este brote"):
-                filas = []
-                for _, fila in df_subida.iterrows():
-                    try:
-                        fecha_val = pd.to_datetime(fila["fecha"]).date()
-                    except Exception:
-                        continue
-                    filas.append({
-                        "fecha": fecha_val,
-                        "casos_nuevos": fila.get("casos_nuevos", 0),
-                        "fallecidos": fila.get("fallecidos", 0) if pd.notna(fila.get("fallecidos", 0)) else 0,
-                        "recuperados": fila.get("recuperados", 0) if pd.notna(fila.get("recuperados", 0)) else 0,
-                        "via_nombre": str(fila.get("via", "")) if pd.notna(fila.get("via", "")) else "",
-                        "ubicacion": {
-                            "pais": str(fila.get("pais", "")) if pd.notna(fila.get("pais", "")) else "",
-                            "departamento": str(fila.get("departamento", "")) if pd.notna(fila.get("departamento", "")) else "",
-                            "ciudad": str(fila.get("ciudad", "")) if pd.notna(fila.get("ciudad", "")) else "",
-                            "barrio": str(fila.get("barrio", "")) if pd.notna(fila.get("barrio", "")) else "",
-                        } if "pais" in df_subida.columns else None,
-                    })
+        columnas_requeridas = {"fecha", "casos_nuevos"}
+        if not columnas_requeridas.issubset(set(df_subida.columns)):
+            st.error(f"Faltan columnas obligatorias: {columnas_requeridas - set(df_subida.columns)}")
+            return
 
-                with st.spinner("Importando..."):
-                    resultado = db.importar_registros_masivo(usuario_id, brote_id, filas, catalogo_usuario_id=catalogo_id)
+        if st.button(f"Importar {len(df_subida)} filas a este brote"):
+            filas = []
+            for _, fila in df_subida.iterrows():
+                try:
+                    fecha_val = pd.to_datetime(fila["fecha"]).date()
+                except Exception:
+                    continue
+                filas.append({
+                    "fecha": fecha_val,
+                    "casos_nuevos": fila.get("casos_nuevos", 0),
+                    "fallecidos": fila.get("fallecidos", 0) if pd.notna(fila.get("fallecidos", 0)) else 0,
+                    "recuperados": fila.get("recuperados", 0) if pd.notna(fila.get("recuperados", 0)) else 0,
+                    "via_nombre": str(fila.get("via", "")) if pd.notna(fila.get("via", "")) else "",
+                    "ubicacion": {
+                        "pais": str(fila.get("pais", "")) if pd.notna(fila.get("pais", "")) else "",
+                        "departamento": str(fila.get("departamento", "")) if pd.notna(fila.get("departamento", "")) else "",
+                        "ciudad": str(fila.get("ciudad", "")) if pd.notna(fila.get("ciudad", "")) else "",
+                        "barrio": str(fila.get("barrio", "")) if pd.notna(fila.get("barrio", "")) else "",
+                    } if "pais" in df_subida.columns else None,
+                })
 
-                st.success(f"{resultado['exitosos']} filas importadas correctamente.")
-                if resultado["fallidos"]:
-                    st.warning(f"{len(resultado['fallidos'])} filas fallaron.")
-                    st.dataframe(pd.DataFrame(resultado["fallidos"]), use_container_width=True)
-                st.rerun()
+            with st.spinner("Importando..."):
+                resultado = db.importar_registros_masivo(usuario_id, brote_id, filas, catalogo_usuario_id=catalogo_id)
+
+            st.success(f"{resultado['exitosos']} filas importadas correctamente.")
+            if resultado["fallidos"]:
+                st.warning(f"{len(resultado['fallidos'])} filas fallaron.")
+                st.dataframe(pd.DataFrame(resultado["fallidos"]), use_container_width=True)
+            st.session_state.pop("_df_url_cache", None)
+            st.rerun()
 
 
 def seccion_lateral_editar_eliminar(usuario_id: str, brote_id: int):
@@ -408,6 +461,21 @@ def seccion_lateral_admin(usuario_id: str):
     if not db.es_admin(usuario_id):
         return
     with st.expander("🔑 Administrador"):
+        with st.form("form_config_anthropic"):
+            st.caption("Clave de Anthropic para el chatbot de interpretación (🤖 en el dashboard) — aplica para TODOS los usuarios de la app, no solo para ti.")
+            clave_actual = db.obtener_configuracion("ANTHROPIC_API_KEY")
+            nueva_clave = st.text_input(
+                "ANTHROPIC_API_KEY", type="password",
+                placeholder="sk-ant-..." if not clave_actual else "•••••••••••••• (ya configurada, pega una nueva para reemplazarla)",
+            )
+            guardar_clave = st.form_submit_button("Guardar clave")
+        if guardar_clave and nueva_clave.strip():
+            try:
+                db.guardar_configuracion_admin("ANTHROPIC_API_KEY", nueva_clave.strip())
+                st.success("Clave guardada — ya aplica para todos los usuarios.")
+            except Exception as e:
+                st.error(f"No se pudo guardar: {e}")
+
         try:
             stats = db.estadisticas_globales_admin()
         except Exception as e:
@@ -493,14 +561,22 @@ def dashboard_grafico_principal(serie: list):
         return
     df["fecha"] = pd.to_datetime(df["fecha"])
 
+    series_disponibles = {"Casos activos": "casos_activos", "Casos nuevos": "casos_nuevos"}
+    seleccion = st.multiselect(
+        "Mostrar en el gráfico:", options=list(series_disponibles.keys()),
+        default=list(series_disponibles.keys()), key="filtro_grafico_principal",
+    )
+
     try:
         import plotly.graph_objects as go
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Casos activos",
-                                  mode="lines+markers", line=dict(color=COLOR_AZUL_COMPLEMENTARIO, width=3)))
-        fig.add_trace(go.Bar(x=df["fecha"], y=df["casos_nuevos"], name="Casos nuevos",
-                              marker_color=COLOR_CIAN, opacity=0.5, yaxis="y2"))
+        if "Casos activos" in seleccion:
+            fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Casos activos",
+                                      mode="lines+markers", line=dict(color=COLOR_AZUL_COMPLEMENTARIO, width=3)))
+        if "Casos nuevos" in seleccion:
+            fig.add_trace(go.Bar(x=df["fecha"], y=df["casos_nuevos"], name="Casos nuevos",
+                                  marker_color=COLOR_CIAN, opacity=0.5, yaxis="y2"))
         fig.update_layout(
             height=400,
             yaxis=dict(title="Casos activos"),
@@ -524,22 +600,26 @@ def dashboard_grafico_componentes(serie: list):
     df["fecha"] = pd.to_datetime(df["fecha"])
 
     st.markdown("#### Activos, recuperados y fallecidos")
+    series_disponibles = {"Activos": "casos_activos", "Recuperados (acum.)": "recuperados_acumulados", "Fallecidos (acum.)": "fallecidos_acumulados"}
+    seleccion = st.multiselect(
+        "Mostrar en el gráfico:", options=list(series_disponibles.keys()),
+        default=list(series_disponibles.keys()), key="filtro_grafico_componentes",
+    )
+
     try:
         import plotly.graph_objects as go
 
+        colores = {"Activos": COLOR_AZUL_OSCURO, "Recuperados (acum.)": "green", "Fallecidos (acum.)": "red"}
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Activos",
-                                  line=dict(color=COLOR_AZUL_OSCURO, width=3)))
-        fig.add_trace(go.Scatter(x=df["fecha"], y=df["recuperados_acumulados"], name="Recuperados (acum.)",
-                                  line=dict(color="green", width=2)))
-        fig.add_trace(go.Scatter(x=df["fecha"], y=df["fallecidos_acumulados"], name="Fallecidos (acum.)",
-                                  line=dict(color="red", width=2)))
+        for nombre in seleccion:
+            campo = series_disponibles[nombre]
+            fig.add_trace(go.Scatter(x=df["fecha"], y=df[campo], name=nombre, line=dict(color=colores[nombre], width=2 if nombre != "Activos" else 3)))
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02))
         fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
-        st.line_chart(df.set_index("fecha")[["casos_activos", "recuperados_acumulados", "fallecidos_acumulados"]])
+        st.line_chart(df.set_index("fecha")[[series_disponibles[n] for n in seleccion]] if seleccion else df.set_index("fecha")[["casos_activos"]])
 
 
 def dashboard_comparacion_vias(por_via: dict):
@@ -624,7 +704,7 @@ def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str):
             mensaje_modelo = resultado["mensaje"]
     else:
         resultado = proyecciones.ajustar_crecimiento_logistico(serie, dias_futuros=dias_futuros)
-        _mostrar_proyeccion_logistica(resultado)
+        _mostrar_proyeccion_logistica(resultado, serie)
         if resultado["valido"]:
             nuevos_futuros = [{"fecha": p["fecha"], "valor": p["casos_nuevos_proyectados"]} for p in resultado["proyeccion"]]
             tabla_combinada = proyecciones.descomponer_proyeccion_desde_nuevos(serie, nuevos_futuros)
@@ -686,6 +766,17 @@ def _mostrar_proyeccion_con_banda(serie: list, resultado: dict, etiqueta_metrica
                               "limite_inferior": p["limite_inferior"], "limite_superior": p["limite_superior"]}
                              for p in resultado["proyeccion"]])
 
+    # Conectar visualmente el histórico con la proyección: sin este punto
+    # "puente", la línea de proyección arranca un día después de donde
+    # termina el histórico y se ve como un corte/salto en el gráfico.
+    if not df_hist.empty and not df_proy.empty:
+        ultimo_punto = df_hist.iloc[-1]
+        puente = pd.DataFrame([{
+            "fecha": ultimo_punto["fecha"], "valor": ultimo_punto["valor"],
+            "limite_inferior": ultimo_punto["valor"], "limite_superior": ultimo_punto["valor"],
+        }])
+        df_proy = pd.concat([puente, df_proy], ignore_index=True)
+
     try:
         import plotly.graph_objects as go
 
@@ -714,7 +805,7 @@ def _mostrar_proyeccion_con_banda(serie: list, resultado: dict, etiqueta_metrica
         st.metric("Días usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
 
 
-def _mostrar_proyeccion_logistica(resultado: dict):
+def _mostrar_proyeccion_logistica(resultado: dict, serie: list):
     if not resultado["valido"]:
         st.warning(resultado["mensaje"])
         return
@@ -723,9 +814,53 @@ def _mostrar_proyeccion_logistica(resultado: dict):
     c1.metric("K (techo estimado)", f"{resultado['K_techo_estimado']:.0f}")
     c2.metric("r (tasa de crecimiento)", f"{resultado['r_tasa_crecimiento']:.3f}")
     c3.metric("Días usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
-    df_proy = pd.DataFrame(resultado["proyeccion"])
-    df_proy["fecha"] = pd.to_datetime(df_proy["fecha"]).dt.strftime("%d/%m/%Y")
-    st.dataframe(df_proy.round(1), use_container_width=True, hide_index=True)
+
+    # Este modelo proyecta CASOS ACUMULADOS (no activos), así que se
+    # compara contra el acumulado histórico — no contra casos_activos,
+    # que es una magnitud distinta.
+    df_hist = pd.DataFrame([{"fecha": r["fecha"], "valor": r["casos_acumulados"]} for r in serie if r.get("casos_acumulados") is not None])
+    df_proy = pd.DataFrame([{
+        "fecha": p["fecha"], "valor": p["casos_acumulados_proyectados"],
+        "limite_inferior": p["casos_acumulados_limite_inferior"], "limite_superior": p["casos_acumulados_limite_superior"],
+    } for p in resultado["proyeccion"]])
+
+    if not df_hist.empty and not df_proy.empty:
+        ultimo_punto = df_hist.iloc[-1]
+        puente = pd.DataFrame([{
+            "fecha": ultimo_punto["fecha"], "valor": ultimo_punto["valor"],
+            "limite_inferior": ultimo_punto["valor"], "limite_superior": ultimo_punto["valor"],
+        }])
+        df_proy = pd.concat([puente, df_proy], ignore_index=True)
+
+    try:
+        import plotly.graph_objects as go
+
+        df_hist["fecha"] = pd.to_datetime(df_hist["fecha"])
+        df_proy["fecha"] = pd.to_datetime(df_proy["fecha"])
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_proy["fecha"], y=df_proy["limite_superior"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=df_proy["fecha"], y=df_proy["limite_inferior"], fill="tonexty",
+                                  fillcolor="rgba(158,51,178,0.2)", line=dict(width=0), name="Banda de incertidumbre"))
+        fig.add_trace(go.Scatter(x=df_hist["fecha"], y=df_hist["valor"], name="Histórico (acumulado)",
+                                  line=dict(color=COLOR_AZUL_OSCURO, width=3)))
+        fig.add_trace(go.Scatter(x=df_proy["fecha"], y=df_proy["valor"], name="Proyección (acumulado)",
+                                  line=dict(color=COLOR_VIOLETA, width=3, dash="dash")))
+        fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                           yaxis_title="Casos acumulados")
+        fig = _aplicar_interactividad_tiempo(fig)
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.info("Instala 'plotly' para ver el gráfico interactivo.")
+
+    df_tabla = pd.DataFrame(resultado["proyeccion"])
+    df_tabla["fecha"] = pd.to_datetime(df_tabla["fecha"]).dt.strftime("%d/%m/%Y")
+    df_tabla = df_tabla.rename(columns={
+        "fecha": "Fecha", "casos_acumulados_proyectados": "Acumulados proy.",
+        "casos_acumulados_limite_inferior": "Límite inferior", "casos_acumulados_limite_superior": "Límite superior",
+        "casos_nuevos_proyectados": "Nuevos proy.",
+    })
+    st.dataframe(df_tabla.round(1), use_container_width=True, hide_index=True)
 
 
 def dashboard_mapa(usuario_id: str, brote_id: int):
@@ -807,7 +942,7 @@ def seccion_historial_cambios(brote_id: int):
             st.caption(f"{icono} {h['accion'].capitalize()} — registro #{h['registro_id']} — {fecha_legible}")
 
 
-def seccion_subregistro(serie: list):
+def seccion_subregistro(serie: list, tipo_via_actual: str = None):
     with st.expander("🔬 Estimar infectados no diagnosticados"):
         st.caption(
             "Usa la relación de tamaño final de un modelo SIR cerrado para estimar, de forma "
@@ -816,8 +951,17 @@ def seccion_subregistro(serie: list):
         )
         casos_diagnosticados_default = sum(r["casos_nuevos"] for r in serie)
 
+        r0_default = 2.0
+        if tipo_via_actual:
+            perfil = clasificacion.obtener_perfil_r0(tipo_via_actual)
+            r0_default = perfil["r0_sugerido"]
+            st.info(
+                f"Vía **{perfil['etiqueta']}**: R0 de referencia sugerido **{perfil['r0_sugerido']}** "
+                f"(rango típico {perfil['rango'][0]}–{perfil['rango'][1]}). {perfil['nota']}"
+            )
+
         c1, c2 = st.columns(2)
-        r0 = c1.number_input("R0 (número reproductivo básico)", min_value=0.1, value=2.0, step=0.1)
+        r0 = c1.number_input("R0 (número reproductivo básico)", min_value=0.1, value=r0_default, step=0.1)
         poblacion_total = c2.number_input("Población total del área", min_value=1, value=100000, step=1000)
         poblacion_susceptible = c1.number_input("Población susceptible (sin inmunidad)", min_value=1, value=int(poblacion_total * 0.9), step=1000)
         casos_diagnosticados = c2.number_input("Casos diagnosticados acumulados", min_value=0, value=int(casos_diagnosticados_default), step=1)
@@ -833,6 +977,45 @@ def seccion_subregistro(serie: list):
                 cc2.metric("No diagnosticados estimados", f"{resultado['no_diagnosticados_estimados']:.0f}")
                 tasa = resultado["tasa_deteccion_estimada"]
                 cc3.metric("Tasa de detección estimada", f"{tasa*100:.1f}%" if tasa is not None else "N/D")
+
+
+def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
+    with st.expander("🤖 ¿No entiendes la gráfica? Pídele una explicación a la IA"):
+        # Primero busca la clave configurada por el admin (aplica para
+        # todos); si no existe, cae a los Secrets de Streamlit (por si
+        # se configuró a la manera antigua).
+        try:
+            api_key = db.obtener_configuracion("ANTHROPIC_API_KEY")
+        except Exception:
+            api_key = None
+        if not api_key:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+
+        if not api_key:
+            st.caption(
+                "Esta función todavía no está activada. El administrador de la app puede "
+                "configurarla en el menú 🔑 Administrador de la barra lateral."
+            )
+            return
+
+        if st.button("Explícame estos datos en palabras simples"):
+            ultimo = serie[-1] if serie else {}
+            rt_ultimo = ultimo.get("rt_efectivo")
+            resumen = {
+                "brote_nombre": brote_nombre,
+                "vista": vista,
+                "casos_activos_actuales": ultimo.get("casos_activos", "N/D"),
+                "tasa_r": f"{velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "N/D",
+                "dias_duplicacion": f"{velocidad['dias_duplicacion']:.1f}" if velocidad["dias_duplicacion"] is not None else "N/D",
+                "fase": fase["fase"],
+                "rt_ultimo": f"{rt_ultimo:.2f}" if rt_ultimo == rt_ultimo else "N/D",
+            }
+            with st.spinner("Pensando..."):
+                resultado = interpretacion.generar_interpretacion(resumen, api_key)
+            if not resultado["valido"]:
+                st.warning(resultado["mensaje"])
+            else:
+                st.markdown(resultado["texto"])
 
 
 def seccion_datos_oficiales(serie: list):
@@ -894,6 +1077,14 @@ def app_principal():
     vista_sel = st.selectbox("Ver serie:", options=opciones_vista, key="vista_dashboard")
     serie = por_via[vista_sel]
 
+    # Tipo de la vía actualmente seleccionada (si no es TOTAL), para
+    # sugerir un R0 de referencia en el estimador de subregistro.
+    tipo_via_actual = None
+    if vista_sel != "TOTAL":
+        vias_del_brote = db.listar_vias(brote["usuario_id"])
+        via_encontrada = next((v for v in vias_del_brote if v["nombre"] == vista_sel), None)
+        tipo_via_actual = via_encontrada.get("tipo") if via_encontrada else None
+
     velocidad = calculos.tasa_crecimiento_y_duplicacion(serie)
     fase = clasificacion.clasificar_fase_heuristica(velocidad["tasa_r"])
 
@@ -906,8 +1097,9 @@ def app_principal():
     seccion_proyeccion(serie, vista_sel, brote["nombre"])
     seccion_comparar_brotes(usuario["id"], brote["id"])
     seccion_historial_cambios(brote["id"])
-    seccion_subregistro(serie)
+    seccion_subregistro(serie, tipo_via_actual)
     seccion_datos_oficiales(serie)
+    seccion_chatbot_interpretacion(serie, velocidad, fase, brote["nombre"], vista_sel)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
     sugerencia = sm.sugerir_modelo(len(registros), conteo_por_via)

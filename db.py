@@ -44,9 +44,26 @@ def get_client() -> Client:
 
 def set_auth_session(access_token: str, refresh_token: str) -> None:
     """Aplica el token de sesión del usuario autenticado al cliente,
-    para que las políticas RLS (auth.uid()) funcionen en cada consulta."""
+    para que las políticas RLS (auth.uid()) funcionen en cada consulta.
+
+    Nota importante (bug real encontrado en producción): el SDK de
+    Supabase notifica internamente a su cliente de PostgREST cuando la
+    sesión cambia, pero en la práctica esa sincronización puede no
+    completarse a tiempo al restaurar una sesión desde una cookie —
+    dejando a auth.get_user() funcionando (usa el access_token
+    directamente) mientras las consultas a las tablas seguían corriendo
+    como anónimo. Por eso, además de set_session(), se fuerza el header
+    de autorización de PostgREST explícitamente como medida defensiva.
+    """
     client = get_client()
-    client.auth.set_session(access_token, refresh_token)
+    try:
+        client.auth.set_session(access_token, refresh_token)
+    except Exception:
+        pass
+    try:
+        client.postgrest.auth(access_token)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------
@@ -59,12 +76,28 @@ def registrar_usuario(email: str, password: str):
 
 def iniciar_sesion(email: str, password: str):
     client = get_client()
-    return client.auth.sign_in_with_password({"email": email, "password": password})
+    respuesta = client.auth.sign_in_with_password({"email": email, "password": password})
+    # Misma sincronización defensiva que en set_auth_session, por consistencia.
+    try:
+        if respuesta and respuesta.session:
+            client.postgrest.auth(respuesta.session.access_token)
+    except Exception:
+        pass
+    return respuesta
 
 
 def cerrar_sesion():
     client = get_client()
-    client.auth.sign_out()
+    try:
+        # scope="local": solo cierra ESTA sesión sin revocar el refresh
+        # token en el servidor. Nosotros ya limpiamos cookies y
+        # session_state por nuestra cuenta; usar "global" aquí no aporta
+        # nada (el access_token sigue siendo válido hasta su expiración
+        # de todas formas, según el propio SDK) y solo añadía una llamada
+        # de red adicional al servidor de auth.
+        client.auth.sign_out(options={"scope": "local"})
+    except Exception:
+        pass
 
 
 def obtener_perfil(usuario_id: str) -> dict:
@@ -196,11 +229,12 @@ def listar_vias(usuario_id: str) -> list[dict]:
     return res.data or []
 
 
-def crear_via(usuario_id: str, nombre: str) -> dict:
+def crear_via(usuario_id: str, nombre: str, tipo: str = None) -> dict:
     client = get_client()
     res = client.table("vias_contagio").insert({
         "usuario_id": usuario_id,
         "nombre": nombre.strip(),
+        "tipo": tipo,
     }).execute()
     return res.data[0] if res.data else {}
 
@@ -461,3 +495,21 @@ def eliminar_usuario_admin(usuario_id: str) -> None:
     — lo verifica la función de Postgres, no este código."""
     client = get_client()
     client.rpc("admin_eliminar_usuario", {"p_usuario_id": usuario_id}).execute()
+
+
+# ---------------------------------------------------------------------
+# Configuración global (gestionada por el admin, usada por todos)
+# ---------------------------------------------------------------------
+def obtener_configuracion(clave: str) -> str:
+    """Cualquier usuario autenticado puede leer — el valor nunca llega
+    al navegador, solo se usa server-side (ej. para llamar a una API)."""
+    client = get_client()
+    res = client.table("configuracion_global").select("valor").eq("clave", clave).execute()
+    return res.data[0]["valor"] if res.data else None
+
+
+def guardar_configuracion_admin(clave: str, valor: str) -> None:
+    """Solo funciona si quien llama tiene rol admin — lo valida la
+    función de Postgres, no este código."""
+    client = get_client()
+    client.rpc("guardar_configuracion_admin", {"p_clave": clave, "p_valor": valor}).execute()

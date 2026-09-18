@@ -518,3 +518,36 @@ begin
 end;
 $$;
 grant execute on function admin_listar_usuarios() to authenticated;
+
+
+-- =========================================================================
+-- MIGRACIÓN: Configuración global gestionada por admin (ej. ANTHROPIC_API_KEY)
+-- =========================================================================
+create table if not exists configuracion_global (
+    clave          text primary key,
+    valor          text,
+    actualizado_por uuid references auth.users(id),
+    actualizado_en timestamptz default now()
+);
+alter table configuracion_global enable row level security;
+create policy "configuracion_lectura_autenticados" on configuracion_global for select
+    using (auth.role() = 'authenticated');
+
+create or replace function guardar_configuracion_admin(p_clave text, p_valor text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+    if not exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    insert into configuracion_global (clave, valor, actualizado_por, actualizado_en)
+    values (p_clave, p_valor, auth.uid(), now())
+    on conflict (clave) do update set valor = excluded.valor, actualizado_por = excluded.actualizado_por, actualizado_en = now();
+end;
+$$;
+grant execute on function guardar_configuracion_admin(text, text) to authenticated;
+
+-- =========================================================================
+-- MIGRACIÓN: Tipo de vía de contagio (respiratoria, zoonótica, etc.)
+-- =========================================================================
+alter table vias_contagio add column if not exists tipo text
+    check (tipo in ('respiratoria', 'contacto_directo', 'zoonotica', 'vectorial', 'hidrica_alimentaria', 'sexual', 'otra'));

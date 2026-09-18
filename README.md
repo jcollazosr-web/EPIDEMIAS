@@ -154,6 +154,31 @@ o ubicación) sigue restringida al dueño del catálogo.
   fue lo que causó el error al intentar cerrar sesión). Ahora cada
   sesión de navegador tiene su propio cliente en `st.session_state`.
 
+### Lote: correcciones de gráficas + nuevas funciones (sesión de depuración)
+- **Fix crítico de sesión**: `set_session()` del SDK no sincronizaba
+  siempre el header de PostgREST al restaurar desde cookie — se fuerza
+  ahora explícitamente con `client.postgrest.auth(access_token)`.
+  `sign_out()` cambiado a `scope="local"`.
+- **Fix de gráficas de proyección**: la línea de proyección no conectaba
+  visualmente con el histórico (se veía "cortada"). Se agrega un punto
+  puente en ambos modelos.
+- El modelo de **crecimiento logístico ahora tiene gráfico** (antes solo
+  mostraba tabla), comparado correctamente contra el acumulado histórico.
+- **Filtros de series** en los gráficos (activos/nuevos/recuperados/
+  fallecidos) vía multiselect.
+- **Tipo de vía de contagio** (respiratoria, zoonótica, contacto directo,
+  vectorial, hídrica/alimentaria, sexual, otra) con perfiles de R0
+  orientativos (`clasificacion.PERFILES_R0_POR_TIPO_VIA`) que alimentan
+  el estimador de subregistro.
+- **Chatbot de interpretación** (`interpretacion.py`, API de Claude) —
+  requiere `ANTHROPIC_API_KEY` propia en los secrets.
+- **Importar desde URL pública** (OMS, OPS, cualquier portal) además de
+  subir archivo local, en la carga masiva.
+- **Enlace público completo** con la URL real de la app
+  (`https://epidemias-jmcr.streamlit.app`).
+- **Manual de uso no técnico** (`MANUAL_DE_USO.md`), enlazado también
+  dentro de la app en la barra lateral ("❓ Cómo usar esta app").
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
