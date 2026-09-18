@@ -421,8 +421,13 @@ begin
         values (new.brote_id, auth.uid(), 'actualizar', new.id, jsonb_build_object('antes', to_jsonb(old), 'despues', to_jsonb(new)));
         return new;
     elsif (tg_op = 'DELETE') then
-        insert into historial_cambios (brote_id, usuario_id, accion, registro_id, detalle)
-        values (old.brote_id, auth.uid(), 'eliminar', old.id, to_jsonb(old));
+        -- Si el brote ya no existe, es que se está borrando el brote
+        -- completo (cascada) y este registro se va con él: no auditar,
+        -- porque violaría la llave foránea de historial_cambios.
+        if exists (select 1 from brotes where id = old.brote_id) then
+            insert into historial_cambios (brote_id, usuario_id, accion, registro_id, detalle)
+            values (old.brote_id, auth.uid(), 'eliminar', old.id, to_jsonb(old));
+        end if;
         return old;
     end if;
     return null;

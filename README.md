@@ -139,6 +139,14 @@ sensibles) — esto es necesario para que un colaborador vea correctamente
 los nombres en un brote compartido. La ESCRITURA (crear/editar/borrar via
 o ubicación) sigue restringida al dueño del catálogo.
 
+### Bugs corregidos después del despliegue
+- `KeyError: 'es_dueno'` al listar brotes si la app corría con un
+  despliegue a mitad de camino — ahora es defensivo (`.get(...)`).
+- Al eliminar un brote completo, el trigger de auditoría intentaba
+  registrar el borrado en cascada de sus registros usando un `brote_id`
+  que ya no existía (violación de llave foránea). El trigger ahora
+  verifica que el brote siga existiendo antes de auditar un borrado.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
