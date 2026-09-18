@@ -137,16 +137,27 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
         from datetime import datetime
         ultima_fecha = datetime.strptime(ultima_fecha[:10], "%Y-%m-%d").date()
 
+    # Banda de incertidumbre ±2σ sobre los residuales del ajuste (en
+    # escala de casos acumulados) — mismo criterio que en la regresión.
+    acumulado_ajustado = logistico(t, K, r, t0)
+    residuales = acumulado - acumulado_ajustado
+    grados_libertad = max(1, len(t) - 3)  # -3 por K, r, t0
+    sigma = float(np.sqrt(np.sum(residuales ** 2) / grados_libertad))
+
     t_max = t[-1]
     proyeccion = []
     acumulado_anterior = logistico(t_max, K, r, t0)
     for paso in range(1, dias_futuros + 1):
         t_futuro = t_max + paso
         acumulado_futuro = logistico(t_futuro, K, r, t0)
+        acumulado_inf = max(0.0, acumulado_futuro - N_SIGMAS * sigma)
+        acumulado_sup = acumulado_futuro + N_SIGMAS * sigma
         nuevos_del_dia = max(0.0, acumulado_futuro - acumulado_anterior)
         proyeccion.append({
             "fecha": ultima_fecha + timedelta(days=paso),
             "casos_acumulados_proyectados": float(acumulado_futuro),
+            "casos_acumulados_limite_inferior": float(acumulado_inf),
+            "casos_acumulados_limite_superior": float(acumulado_sup),
             "casos_nuevos_proyectados": float(nuevos_del_dia),
         })
         acumulado_anterior = acumulado_futuro
@@ -155,11 +166,13 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
         "valido": True,
         "mensaje": (
             "Modelo de crecimiento logístico (equivalente a un SIR simplificado sin "
-            "necesitar el tamaño de la población). K = techo estimado de casos acumulados."
+            f"necesitar el tamaño de la población), con banda de ±{N_SIGMAS} desviaciones "
+            "estándar sobre los residuales del ajuste."
         ),
         "K_techo_estimado": float(K),
         "r_tasa_crecimiento": float(r),
         "t0_dia_pico_estimado": float(t0),
+        "sigma_residual": sigma,
         "n_dias_usados_en_ajuste": len(puntos),
         "proyeccion": proyeccion,
     }
@@ -303,3 +316,61 @@ def descomponer_proyeccion_desde_nuevos(serie: list[dict], nuevos_futuros: list[
         })
         activos_anterior = activos_t
     return resultado
+
+
+# -----------------------------------------------------------------------
+# Estimación de infectados NO diagnosticados (subregistro), a partir del
+# número reproductivo básico (R0), la población total y la susceptible.
+#
+# Usa la relación clásica de "tamaño final" de una epidemia SIR cerrada
+# (Kermack-McKendrick): la fracción de la población susceptible que
+# terminaría infectada, z, satisface:
+#
+#       z = 1 - exp(-R0 * z)
+#
+# resuelta por iteración de punto fijo. Es una idealización (asume
+# población homogénea, epidemia que corre hasta su fin natural) — sirve
+# como orden de magnitud orientativo, NO como conteo preciso en tiempo
+# real. Se documenta así explícitamente en el mensaje de resultado.
+# -----------------------------------------------------------------------
+def estimar_infectados_no_diagnosticados(
+    r0: float, poblacion_total: int, poblacion_susceptible: int, casos_diagnosticados_acumulados: int
+) -> dict:
+    if r0 <= 1:
+        return {
+            "valido": False,
+            "mensaje": (
+                "Con R0 ≤ 1 el modelo de tamaño final no aplica: la epidemia se apaga "
+                "sin necesariamente alcanzar una fracción amplia de la población."
+            ),
+        }
+    if poblacion_total <= 0 or poblacion_susceptible <= 0:
+        return {"valido": False, "mensaje": "La población total y la susceptible deben ser mayores a cero."}
+
+    z = 0.5
+    for _ in range(500):
+        z_nuevo = 1 - math.exp(-r0 * z)
+        if abs(z_nuevo - z) < 1e-9:
+            z = z_nuevo
+            break
+        z = z_nuevo
+
+    infectados_totales_estimados = z * poblacion_susceptible
+    no_diagnosticados = max(0.0, infectados_totales_estimados - casos_diagnosticados_acumulados)
+    tasa_deteccion = (casos_diagnosticados_acumulados / infectados_totales_estimados) if infectados_totales_estimados > 0 else None
+
+    return {
+        "valido": True,
+        "fraccion_final_infectada": z,
+        "infectados_totales_estimados": infectados_totales_estimados,
+        "casos_diagnosticados": casos_diagnosticados_acumulados,
+        "no_diagnosticados_estimados": no_diagnosticados,
+        "tasa_deteccion_estimada": tasa_deteccion,
+        "mensaje": (
+            "Estimación basada en la relación de tamaño final de un modelo SIR cerrado "
+            "(supone población homogénea y que la epidemia corre hasta agotar su "
+            "dinámica natural). Es un orden de magnitud orientativo para planeación, "
+            "no un conteo preciso — útil para dimensionar capacidad, no para reportar "
+            "cifras oficiales."
+        ),
+    }

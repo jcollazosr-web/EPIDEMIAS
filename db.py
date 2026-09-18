@@ -86,9 +86,15 @@ def cambiar_password(nueva_password: str):
 # Brotes (permite hacerle seguimiento a varias epidemias en paralelo)
 # ---------------------------------------------------------------------
 def listar_brotes(usuario_id: str) -> list[dict]:
+    """Trae los brotes que el usuario puede ver: los suyos + los que le
+    hayan compartido como colaborador (RLS ya filtra esto solo). Se marca
+    cada uno con 'es_dueno' para que la UI distinga qué puede administrar."""
     client = get_client()
-    res = client.table("brotes").select("*").eq("usuario_id", usuario_id).order("creado_en").execute()
-    return res.data or []
+    res = client.table("brotes").select("*").order("creado_en").execute()
+    brotes = res.data or []
+    for b in brotes:
+        b["es_dueno"] = (b["usuario_id"] == usuario_id)
+    return brotes
 
 
 def crear_brote(usuario_id: str, nombre: str, descripcion: str = "") -> dict:
@@ -106,12 +112,71 @@ def eliminar_brote(brote_id: int) -> None:
 
 
 def asegurar_brote_por_defecto(usuario_id: str) -> dict:
-    """Si el usuario no tiene ningún brote todavía, le crea uno inicial
-    para que la app nunca quede sin un brote activo que seleccionar."""
+    """Si el usuario no tiene ningún brote todavía (ni propio ni
+    compartido), le crea uno inicial para que la app nunca quede sin un
+    brote activo que seleccionar."""
     brotes = listar_brotes(usuario_id)
     if brotes:
         return brotes[0]
     return crear_brote(usuario_id, "Brote 1", "Creado automáticamente")
+
+
+# ---------------------------------------------------------------------
+# Colaboradores por brote
+# ---------------------------------------------------------------------
+def invitar_colaborador(brote_id: int, correo: str) -> dict:
+    client = get_client()
+    res = client.rpc("invitar_colaborador", {"p_brote_id": brote_id, "p_correo": correo}).execute()
+    return res.data or {}
+
+
+def listar_colaboradores(brote_id: int) -> list[dict]:
+    client = get_client()
+    res = client.rpc("listar_colaboradores", {"p_brote_id": brote_id}).execute()
+    return res.data or []
+
+
+def quitar_colaborador(brote_id: int, usuario_id: str) -> None:
+    client = get_client()
+    client.rpc("quitar_colaborador", {"p_brote_id": brote_id, "p_usuario_id": usuario_id}).execute()
+
+
+# ---------------------------------------------------------------------
+# Dashboard público (enlace compartible de solo lectura, sin login)
+# ---------------------------------------------------------------------
+def generar_token_publico(brote_id: int) -> str:
+    client = get_client()
+    res = client.rpc("generar_token_publico", {"p_brote_id": brote_id}).execute()
+    return res.data
+
+
+def revocar_token_publico(brote_id: int) -> None:
+    client = get_client()
+    client.rpc("revocar_token_publico", {"p_brote_id": brote_id}).execute()
+
+
+def obtener_brote_publico(token: str) -> dict:
+    """No requiere sesión iniciada — la propia función de Postgres valida
+    el token y solo devuelve datos de lectura para ESE brote específico."""
+    client = get_client()
+    res = client.rpc("obtener_brote_publico", {"p_token": token}).execute()
+    return res.data or {}
+
+
+# ---------------------------------------------------------------------
+# Historial de cambios (auditoría)
+# ---------------------------------------------------------------------
+def obtener_historial(brote_id: int, limite: int = 50) -> list[dict]:
+    client = get_client()
+    res = (
+        client.table("historial_cambios")
+        .select("*")
+        .eq("brote_id", brote_id)
+        .order("creado_en", desc=True)
+        .limit(limite)
+        .execute()
+    )
+    return res.data or []
 
 
 # ---------------------------------------------------------------------
@@ -150,14 +215,15 @@ def asegurar_vias_por_defecto(usuario_id: str) -> None:
 # ---------------------------------------------------------------------
 # Registros diarios
 # ---------------------------------------------------------------------
-def obtener_registros(usuario_id: str, brote_id: Optional[int] = None) -> list[dict]:
-    """Trae los registros del usuario (opcionalmente filtrados a un solo
-    brote), con el nombre de la vía y la ubicación ya resueltos (join)."""
+def obtener_registros(usuario_id: str = None, brote_id: Optional[int] = None) -> list[dict]:
+    """Trae los registros visibles para la sesión actual (dueño o
+    colaborador — lo decide RLS, no este filtro), opcionalmente acotados
+    a un solo brote. El parámetro usuario_id ya no se usa para filtrar
+    (se deja por compatibilidad de firma) — filtrar por él rompería la
+    visibilidad cuando varios colaboradores aportan datos al mismo brote."""
     client = get_client()
-    query = (
-        client.table("registros_diarios")
-        .select("*, vias_contagio(nombre), ubicaciones(pais, departamento, ciudad, barrio, latitud, longitud)")
-        .eq("usuario_id", usuario_id)
+    query = client.table("registros_diarios").select(
+        "*, vias_contagio(nombre), ubicaciones(pais, departamento, ciudad, barrio, latitud, longitud)"
     )
     if brote_id is not None:
         query = query.eq("brote_id", brote_id)
@@ -204,16 +270,14 @@ def upsert_registro(
     return res.data[0] if res.data else {}
 
 
-def importar_registros_masivo(usuario_id: str, brote_id: int, filas: list[dict]) -> dict:
+def importar_registros_masivo(usuario_id: str, brote_id: int, filas: list[dict], catalogo_usuario_id: str = None) -> dict:
     """
     Inserta muchos registros de una vez (carga desde Excel/CSV).
-    Cada fila en `filas` debe traer: fecha (date), via_nombre (str, opcional),
-    ubicacion (dict opcional con pais/departamento/ciudad/barrio),
-    casos_nuevos, fallecidos, recuperados.
-
-    Reutiliza/crea vías y ubicaciones automáticamente por nombre, igual que
-    el formulario manual, para no duplicar catálogos.
+    `usuario_id` es quien sube el archivo (autor del registro).
+    `catalogo_usuario_id` es el dueño del catálogo de vías/ubicaciones
+    (normalmente el dueño del brote) — si no se pasa, se usa usuario_id.
     """
+    catalogo_usuario_id = catalogo_usuario_id or usuario_id
     exitosos, fallidos = 0, []
     cache_vias: dict[str, int] = {}
 
@@ -223,10 +287,10 @@ def importar_registros_masivo(usuario_id: str, brote_id: int, filas: list[dict])
             via_id = None
             if via_nombre:
                 if via_nombre not in cache_vias:
-                    existentes = {v["nombre"]: v["id"] for v in listar_vias(usuario_id)}
+                    existentes = {v["nombre"]: v["id"] for v in listar_vias(catalogo_usuario_id)}
                     if via_nombre not in existentes:
-                        crear_via(usuario_id, via_nombre)
-                        existentes = {v["nombre"]: v["id"] for v in listar_vias(usuario_id)}
+                        crear_via(catalogo_usuario_id, via_nombre)
+                        existentes = {v["nombre"]: v["id"] for v in listar_vias(catalogo_usuario_id)}
                     cache_vias[via_nombre] = existentes.get(via_nombre)
                 via_id = cache_vias[via_nombre]
 
@@ -234,7 +298,7 @@ def importar_registros_masivo(usuario_id: str, brote_id: int, filas: list[dict])
             ubic = fila.get("ubicacion")
             if ubic and ubic.get("pais"):
                 u = obtener_o_crear_ubicacion(
-                    usuario_id, ubic.get("pais", ""), ubic.get("departamento", ""),
+                    catalogo_usuario_id, ubic.get("pais", ""), ubic.get("departamento", ""),
                     ubic.get("ciudad", ""), ubic.get("barrio", ""),
                 )
                 ubicacion_id = u.get("id")
@@ -381,3 +445,11 @@ def listar_usuarios_admin() -> list[dict]:
     client = get_client()
     res = client.rpc("admin_listar_usuarios", {}).execute()
     return res.data or []
+
+
+def eliminar_usuario_admin(usuario_id: str) -> None:
+    """Elimina una cuenta por completo (perfil, brotes, registros, todo
+    por ON DELETE CASCADE). Solo funciona si quien llama tiene rol admin
+    — lo verifica la función de Postgres, no este código."""
+    client = get_client()
+    client.rpc("admin_eliminar_usuario", {"p_usuario_id": usuario_id}).execute()

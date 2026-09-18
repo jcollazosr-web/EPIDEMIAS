@@ -105,6 +105,40 @@ seguimiento_epidemia/
   de tipos (`varchar` vs `text`) al leer `auth.users.email` — ya corregido
   en la base de datos y en `schema.sql`.
 
+## Novedades de esta versión (lote grande)
+
+- **Colaboradores por brote**: el dueño puede invitar (por correo) a otros
+  usuarios ya registrados a ver/editar un brote específico.
+- **Auditoría de cambios**: cada crear/actualizar/eliminar sobre un registro
+  queda guardado en `historial_cambios`, visible en el dashboard.
+- **Dashboard público**: enlace `?token_publico=...` que muestra un
+  resumen de solo lectura sin necesidad de iniciar sesión — ideal para
+  compartir con donantes o la comunidad.
+- **Comparar brotes**: gráfico que superpone la curva de varios brotes,
+  alineados por "días desde el inicio" (no por fecha calendario).
+- **Botón de eliminar brote completo** y **botón de eliminar usuarios**
+  (panel de administrador), ambos con confirmación.
+- **±2σ en TODOS los modelos de proyección**, incluido el crecimiento
+  logístico (antes no tenía banda de incertidumbre).
+- **Gráficas más interactivas**: zoom, selector de rango (7d/30d/90d/todo)
+  y barra deslizante en el eje de tiempo (Plotly rangeslider).
+- **Estimador de infectados no diagnosticados**: a partir de R0, población
+  total y susceptible, usando la relación de tamaño final de un SIR
+  cerrado — es una herramienta orientativa de planeación, no un conteo
+  preciso (documentado así en la propia interfaz).
+- **Integración con Datos Abiertos Colombia**: comparación contra el
+  dataset oficial de COVID-19 (datos.gov.co) filtrado por departamento.
+  ⚠️ No se pudo probar en vivo desde el entorno de desarrollo (el dominio
+  datos.gov.co no está en su lista de acceso) — pruébalo tú en la app ya
+  desplegada y avisa si falla.
+
+### Nota técnica importante: catálogos compartidos entre colaboradores
+Las vías de contagio y ubicaciones ahora son de LECTURA abierta para
+cualquier usuario autenticado (son solo etiquetas descriptivas, sin datos
+sensibles) — esto es necesario para que un colaborador vea correctamente
+los nombres en un brote compartido. La ESCRITURA (crear/editar/borrar via
+o ubicación) sigue restringida al dueño del catálogo.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

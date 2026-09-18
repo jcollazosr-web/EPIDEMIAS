@@ -24,6 +24,7 @@ import calculos
 import proyecciones
 import clasificacion
 import reportes
+import datos_oficiales
 import sugerencia_modelos as sm
 
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
@@ -203,9 +204,13 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
     st.markdown("### 🦠 Brote activo")
     db.asegurar_brote_por_defecto(usuario_id)
     brotes = db.listar_brotes(usuario_id)
-    nombres = {b["nombre"]: b for b in brotes}
+    etiquetas = {
+        f"{b['nombre']}" + ("" if b["es_dueno"] else " (colaborador)"): b
+        for b in brotes
+    }
 
-    nombre_sel = st.selectbox("Selecciona el brote a trabajar", options=list(nombres.keys()), key="selector_brote")
+    etiqueta_sel = st.selectbox("Selecciona el brote a trabajar", options=list(etiquetas.keys()), key="selector_brote")
+    brote = etiquetas[etiqueta_sel]
 
     with st.expander("+ Crear nuevo brote"):
         with st.form("form_nuevo_brote"):
@@ -217,20 +222,72 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
             st.success(f"Brote '{nombre_nuevo}' creado.")
             st.rerun()
 
-    return nombres[nombre_sel]
+    if brote["es_dueno"]:
+        with st.expander("👥 Colaboradores de este brote"):
+            with st.form("form_invitar_colaborador"):
+                correo_colab = st.text_input("Correo del colaborador (debe tener cuenta ya creada)")
+                invitar = st.form_submit_button("Invitar")
+            if invitar and correo_colab.strip():
+                try:
+                    db.invitar_colaborador(brote["id"], correo_colab.strip())
+                    st.success(f"{correo_colab} ahora puede ver y editar este brote.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo invitar: {e}")
+
+            try:
+                colaboradores = db.listar_colaboradores(brote["id"])
+            except Exception:
+                colaboradores = []
+            if colaboradores:
+                st.caption("Colaboradores actuales:")
+                for c in colaboradores:
+                    cc1, cc2 = st.columns([4, 1])
+                    cc1.caption(c["email"])
+                    if cc2.button("✕", key=f"quitar_colab_{c['usuario_id']}"):
+                        db.quitar_colaborador(brote["id"], c["usuario_id"])
+                        st.rerun()
+            else:
+                st.caption("Todavía no hay colaboradores en este brote.")
+
+        with st.expander("🔗 Compartir públicamente"):
+            st.caption("Genera un enlace de solo lectura, sin necesidad de iniciar sesión.")
+            if brote.get("token_publico"):
+                url_publica = f"?token_publico={brote['token_publico']}"
+                st.text_input("Enlace (copia y pega la URL completa de la app + esto):", value=url_publica, key="url_publica_actual")
+                if st.button("Revocar enlace público"):
+                    db.revocar_token_publico(brote["id"])
+                    st.rerun()
+            else:
+                if st.button("Generar enlace público"):
+                    db.generar_token_publico(brote["id"])
+                    st.rerun()
+
+        with st.expander("⚠️ Eliminar este brote"):
+            st.warning("Esto borra el brote y TODOS sus registros permanentemente. No se puede deshacer.")
+            confirmar = st.checkbox(f"Sí, quiero eliminar '{brote['nombre']}' y todos sus datos", key="confirmar_eliminar_brote")
+            if confirmar and st.button("Eliminar brote definitivamente"):
+                db.eliminar_brote(brote["id"])
+                st.success("Brote eliminado.")
+                st.rerun()
+
+    return brote
 
 
-def seccion_lateral_captura(usuario_id: str, brote_id: int):
+def seccion_lateral_captura(usuario_id: str, brote: dict):
+    brote_id = brote["id"]
+    catalogo_id = brote["usuario_id"]  # catálogo compartido: siempre el dueño del brote
+
     with st.expander("✍️ Registrar un caso", expanded=False):
-        db.asegurar_vias_por_defecto(usuario_id)
-        vias = db.listar_vias(usuario_id)
+        db.asegurar_vias_por_defecto(catalogo_id)
+        vias = db.listar_vias(catalogo_id)
         nombres_vias = {v["nombre"]: v["id"] for v in vias}
 
         with st.popover("+ Añadir nueva vía de contagio"):
             nueva_via = st.text_input("Nombre de la vía", key="nueva_via_input")
             if st.button("Guardar vía"):
                 if nueva_via.strip():
-                    db.crear_via(usuario_id, nueva_via.strip())
+                    db.crear_via(catalogo_id, nueva_via.strip())
                     st.rerun()
 
         st.caption("Ubicación (se geocodifica automáticamente con OpenStreetMap)")
@@ -251,7 +308,7 @@ def seccion_lateral_captura(usuario_id: str, brote_id: int):
             via_id = nombres_vias.get(via_sel_nombre)
             ubicacion_id = None
             if pais.strip():
-                ubicacion = db.obtener_o_crear_ubicacion(usuario_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip())
+                ubicacion = db.obtener_o_crear_ubicacion(catalogo_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip())
                 ubicacion_id = ubicacion.get("id")
                 if ubicacion and ubicacion.get("latitud") is None:
                     st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
@@ -265,7 +322,10 @@ def seccion_lateral_captura(usuario_id: str, brote_id: int):
             st.rerun()
 
 
-def seccion_lateral_carga_masiva(usuario_id: str, brote_id: int):
+def seccion_lateral_carga_masiva(usuario_id: str, brote: dict):
+    brote_id = brote["id"]
+    catalogo_id = brote["usuario_id"]
+
     with st.expander("📤 Cargar datos desde Excel/CSV", expanded=False):
         st.caption(
             "Columnas esperadas: **fecha, casos_nuevos, fallecidos, recuperados** "
@@ -314,7 +374,7 @@ def seccion_lateral_carga_masiva(usuario_id: str, brote_id: int):
                     })
 
                 with st.spinner("Importando..."):
-                    resultado = db.importar_registros_masivo(usuario_id, brote_id, filas)
+                    resultado = db.importar_registros_masivo(usuario_id, brote_id, filas, catalogo_usuario_id=catalogo_id)
 
                 st.success(f"{resultado['exitosos']} filas importadas correctamente.")
                 if resultado["fallidos"]:
@@ -362,9 +422,31 @@ def seccion_lateral_admin(usuario_id: str):
         st.markdown("**Usuarios registrados**")
         try:
             usuarios = db.listar_usuarios_admin()
-            st.dataframe(pd.DataFrame(usuarios), use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"No se pudo obtener la lista de usuarios: {e}")
+            return
+
+        for u in usuarios:
+            cu1, cu2 = st.columns([4, 1])
+            cu1.caption(f"{u['email']} — {'✅ confirmado' if u['confirmado'] else '⏳ sin confirmar'}")
+            if u["usuario_id"] != usuario_id:  # no permitir auto-eliminarse desde aquí
+                if cu2.button("🗑️", key=f"del_usuario_{u['usuario_id']}"):
+                    st.session_state[f"confirmar_del_{u['usuario_id']}"] = True
+
+            if st.session_state.get(f"confirmar_del_{u['usuario_id']}"):
+                st.warning(f"¿Eliminar a {u['email']} y TODOS sus brotes/registros? No se puede deshacer.")
+                cc1, cc2 = st.columns(2)
+                if cc1.button("Sí, eliminar", key=f"confirmar_si_{u['usuario_id']}"):
+                    try:
+                        db.eliminar_usuario_admin(u["usuario_id"])
+                        st.success("Usuario eliminado.")
+                        del st.session_state[f"confirmar_del_{u['usuario_id']}"]
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo eliminar: {e}")
+                if cc2.button("Cancelar", key=f"confirmar_no_{u['usuario_id']}"):
+                    del st.session_state[f"confirmar_del_{u['usuario_id']}"]
+                    st.rerun()
 
 
 def seccion_lateral_donacion():
@@ -383,6 +465,23 @@ def dashboard_kpis(serie: list, velocidad: dict, fase: dict):
     c2.metric("Rt efectivo (último día)", f"{ultimo.get('rt_efectivo', 0):.2f}" if ultimo.get("rt_efectivo") == ultimo.get("rt_efectivo") else "N/D")
     c3.metric("Tasa de crecimiento (r)", f"{velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "N/D")
     c4.metric("Fase estimada", f"{fase['color']} {fase['fase']}")
+
+
+def _aplicar_interactividad_tiempo(fig):
+    """Agrega scroll/zoom en el eje de tiempo: selector de rango (7d/30d/todo)
+    y una barra deslizante debajo del gráfico para navegar el histórico."""
+    fig.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(
+            buttons=[
+                dict(count=7, label="7d", step="day", stepmode="backward"),
+                dict(count=30, label="30d", step="day", stepmode="backward"),
+                dict(count=90, label="90d", step="day", stepmode="backward"),
+                dict(step="all", label="Todo"),
+            ]
+        ),
+    )
+    return fig
 
 
 def dashboard_grafico_principal(serie: list):
@@ -408,6 +507,7 @@ def dashboard_grafico_principal(serie: list):
             margin=dict(l=10, r=10, t=40, b=10),
             hovermode="x unified",
         )
+        fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(df.set_index("fecha")[["casos_activos"]])
@@ -434,6 +534,7 @@ def dashboard_grafico_componentes(serie: list):
                                   line=dict(color="red", width=2)))
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(df.set_index("fecha")[["casos_activos", "recuperados_acumulados", "fallecidos_acumulados"]])
@@ -598,6 +699,7 @@ def _mostrar_proyeccion_con_banda(serie: list, resultado: dict, etiqueta_metrica
         fig.add_trace(go.Scatter(x=df_proy["fecha"], y=df_proy["valor"], name="Proyección",
                                   line=dict(color=COLOR_VIOLETA, width=3, dash="dash")))
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified")
+        fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.info("Instala 'plotly' para ver el gráfico interactivo.")
@@ -647,6 +749,116 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
         st.map(df_mapa.rename(columns={"latitud": "lat", "longitud": "lon"})[["lat", "lon"]])
 
 
+def seccion_comparar_brotes(usuario_id: str, brote_actual_id: int):
+    todos_los_brotes = db.listar_brotes(usuario_id)
+    if len(todos_los_brotes) < 2:
+        return
+
+    with st.expander("📊 Comparar con otros brotes"):
+        etiquetas = {b["nombre"]: b for b in todos_los_brotes}
+        seleccionados = st.multiselect(
+            "Selecciona brotes a comparar (por días desde su inicio, no por fecha calendario)",
+            options=list(etiquetas.keys()),
+        )
+        if not seleccionados:
+            st.caption("Elige al menos un brote para comparar contra el actual.")
+            return
+
+        try:
+            import plotly.graph_objects as go
+
+            fig = go.Figure()
+            colores = [COLOR_AZUL_OSCURO, COLOR_VIOLETA, COLOR_CIAN, COLOR_AZUL_COMPLEMENTARIO, "green", "orange"]
+            for i, nombre in enumerate(seleccionados):
+                b = etiquetas[nombre]
+                registros_b = db.obtener_registros(usuario_id, brote_id=b["id"])
+                if not registros_b:
+                    continue
+                serie_b = calculos.recalcular_serie(registros_b)
+                dias = list(range(len(serie_b)))
+                activos = [r["casos_activos"] for r in serie_b]
+                fig.add_trace(go.Scatter(x=dias, y=activos, name=nombre, line=dict(color=colores[i % len(colores)], width=2)))
+
+            fig.update_layout(
+                height=380, xaxis_title="Días desde el inicio del brote", yaxis_title="Casos activos",
+                margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except ImportError:
+            st.info("Instala 'plotly' para ver la comparación.")
+
+
+def seccion_historial_cambios(brote_id: int):
+    with st.expander("📝 Historial de cambios (auditoría)"):
+        try:
+            historial = db.obtener_historial(brote_id)
+        except Exception as e:
+            st.error(f"No se pudo cargar el historial: {e}")
+            return
+        if not historial:
+            st.caption("Sin cambios registrados todavía.")
+            return
+        for h in historial:
+            icono = {"crear": "🟢", "actualizar": "🟡", "eliminar": "🔴"}.get(h["accion"], "⚪")
+            fecha_legible = pd.to_datetime(h["creado_en"]).strftime("%d/%m/%Y %H:%M")
+            st.caption(f"{icono} {h['accion'].capitalize()} — registro #{h['registro_id']} — {fecha_legible}")
+
+
+def seccion_subregistro(serie: list):
+    with st.expander("🔬 Estimar infectados no diagnosticados"):
+        st.caption(
+            "Usa la relación de tamaño final de un modelo SIR cerrado para estimar, de forma "
+            "orientativa, cuántas infecciones totales (diagnosticadas + no diagnosticadas) "
+            "implicaría un R0 dado. No es un conteo preciso — es una herramienta de planeación."
+        )
+        casos_diagnosticados_default = sum(r["casos_nuevos"] for r in serie)
+
+        c1, c2 = st.columns(2)
+        r0 = c1.number_input("R0 (número reproductivo básico)", min_value=0.1, value=2.0, step=0.1)
+        poblacion_total = c2.number_input("Población total del área", min_value=1, value=100000, step=1000)
+        poblacion_susceptible = c1.number_input("Población susceptible (sin inmunidad)", min_value=1, value=int(poblacion_total * 0.9), step=1000)
+        casos_diagnosticados = c2.number_input("Casos diagnosticados acumulados", min_value=0, value=int(casos_diagnosticados_default), step=1)
+
+        if st.button("Calcular estimación"):
+            resultado = proyecciones.estimar_infectados_no_diagnosticados(r0, int(poblacion_total), int(poblacion_susceptible), int(casos_diagnosticados))
+            if not resultado["valido"]:
+                st.warning(resultado["mensaje"])
+            else:
+                st.caption(resultado["mensaje"])
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Infectados totales estimados", f"{resultado['infectados_totales_estimados']:.0f}")
+                cc2.metric("No diagnosticados estimados", f"{resultado['no_diagnosticados_estimados']:.0f}")
+                tasa = resultado["tasa_deteccion_estimada"]
+                cc3.metric("Tasa de detección estimada", f"{tasa*100:.1f}%" if tasa is not None else "N/D")
+
+
+def seccion_datos_oficiales(serie: list):
+    with st.expander("🏛️ Comparar con Datos Abiertos Colombia"):
+        st.caption(
+            "Compara tus casos contra el dataset oficial de COVID-19 en datos.gov.co, filtrado "
+            "por departamento. Si tu brote es de otra enfermedad, este dataset específico no "
+            "aplicará — es un ejemplo configurado por defecto (ver datos_oficiales.py)."
+        )
+        departamento = st.text_input("Departamento (como aparece en el dataset oficial)", value="Valle del Cauca")
+        fechas_disponibles = [r["fecha"] for r in serie]
+        if not fechas_disponibles:
+            return
+        fecha_desde = str(fechas_disponibles[0])[:10]
+        fecha_hasta = str(fechas_disponibles[-1])[:10]
+
+        if st.button("Consultar cifras oficiales"):
+            with st.spinner("Consultando datos.gov.co..."):
+                resultado = datos_oficiales.obtener_casos_oficiales_por_departamento(departamento, fecha_desde, fecha_hasta)
+            if not resultado["valido"]:
+                st.warning(resultado["mensaje"])
+            else:
+                st.caption(resultado["mensaje"])
+                df_oficial = pd.DataFrame(resultado["datos"])
+                if not df_oficial.empty:
+                    st.dataframe(df_oficial, use_container_width=True, hide_index=True)
+
+
 # =======================================================================
 # Enrutamiento principal
 # =======================================================================
@@ -658,8 +870,8 @@ def app_principal():
         st.divider()
         brote = seccion_lateral_brotes(usuario["id"])
         st.divider()
-        seccion_lateral_captura(usuario["id"], brote["id"])
-        seccion_lateral_carga_masiva(usuario["id"], brote["id"])
+        seccion_lateral_captura(usuario["id"], brote)
+        seccion_lateral_carga_masiva(usuario["id"], brote)
         seccion_lateral_editar_eliminar(usuario["id"], brote["id"])
         st.divider()
         seccion_lateral_admin(usuario["id"])
@@ -690,16 +902,62 @@ def app_principal():
     dashboard_mapa(usuario["id"], brote["id"])
     dashboard_tabla_y_export(serie, vista_sel)
     seccion_proyeccion(serie, vista_sel, brote["nombre"])
+    seccion_comparar_brotes(usuario["id"], brote["id"])
+    seccion_historial_cambios(brote["id"])
+    seccion_subregistro(serie)
+    seccion_datos_oficiales(serie)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
     sugerencia = sm.sugerir_modelo(len(registros), conteo_por_via)
     st.caption(sugerencia["mensaje"])
 
 
+# =======================================================================
+# DASHBOARD PÚBLICO — vista de solo lectura, sin necesidad de login
+# =======================================================================
+def pantalla_dashboard_publico(token: str):
+    try:
+        datos = db.obtener_brote_publico(token)
+    except Exception as e:
+        st.error(f"Este enlace no es válido o fue revocado por el dueño del brote. ({e})")
+        return
+
+    st.title(f"🦠 {datos.get('nombre', 'Brote')} — Vista pública")
+    if datos.get("descripcion"):
+        st.caption(datos["descripcion"])
+    st.info("Estás viendo un dashboard público de solo lectura, compartido por el equipo de seguimiento.")
+
+    st.markdown(
+        f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💙 Apoya a la Fundación Juan Manuel Collazos — Donar</a>',
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    registros = datos.get("registros") or []
+    if not registros:
+        st.info("Este brote todavía no tiene registros públicos.")
+        return
+
+    # Adaptar al formato que espera calculos.recalcular_serie (mismos
+    # nombres de campo que trae la función pública)
+    serie = calculos.recalcular_serie(registros)
+
+    velocidad = calculos.tasa_crecimiento_y_duplicacion(serie)
+    fase = clasificacion.clasificar_fase_heuristica(velocidad["tasa_r"])
+    dashboard_kpis(serie, velocidad, fase)
+    dashboard_grafico_principal(serie)
+    dashboard_grafico_componentes(serie)
+
+
 # ---------------------------------------------------------------------
 # Enrutamiento
 # ---------------------------------------------------------------------
-if "usuario" not in st.session_state:
+_parametros_url = st.query_params
+_token_publico = _parametros_url.get("token_publico")
+
+if _token_publico:
+    pantalla_dashboard_publico(_token_publico)
+elif "usuario" not in st.session_state:
     pantalla_login()
 else:
     app_principal()
