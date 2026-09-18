@@ -215,3 +215,91 @@ def ajustar_arima(serie: list[dict], dias_futuros: int = 7, orden: tuple = (1, 1
         "n_dias_usados_en_ajuste": len(valores),
         "proyeccion": proyeccion,
     }
+
+
+# -----------------------------------------------------------------------
+# Descomposición de cualquier proyección en sus 4 componentes:
+# casos nuevos, casos activos, recuperados y fallecidos.
+#
+# Los modelos de arriba proyectan una sola cantidad (casos activos, o
+# casos nuevos en el caso logístico). Para desglosarla en las otras tres,
+# se usan las tasas HISTÓRICAS de letalidad y recuperación del propio
+# brote (fallecidos/nuevos y recuperados/nuevos acumulados), aplicadas
+# hacia adelante junto con la identidad contable:
+#
+#     activos_t = activos_(t-1) + nuevos_t - fallecidos_t - recuperados_t
+#
+# Es una extrapolación transparente de patrones ya observados en el
+# brote, no un modelo nuevo — por eso los cuatro modelos de arriba
+# pueden reutilizar esta misma función.
+# -----------------------------------------------------------------------
+def calcular_tasas_historicas(serie: list[dict]) -> tuple[float, float]:
+    total_nuevos = sum(r["casos_nuevos"] for r in serie)
+    total_fallecidos = sum(r["fallecidos"] for r in serie)
+    total_recuperados = sum(r["recuperados"] for r in serie)
+
+    if total_nuevos == 0:
+        return 0.0, 0.0
+
+    tasa_letalidad = total_fallecidos / total_nuevos
+    tasa_recuperacion = total_recuperados / total_nuevos
+
+    # Deja al menos un 5% de margen para que la identidad contable
+    # (activos = nuevos - fallecidos - recuperados) no se vuelva inestable.
+    if tasa_letalidad + tasa_recuperacion >= 0.95:
+        factor = 0.95 / (tasa_letalidad + tasa_recuperacion)
+        tasa_letalidad *= factor
+        tasa_recuperacion *= factor
+
+    return tasa_letalidad, tasa_recuperacion
+
+
+def descomponer_proyeccion_desde_activos(serie: list[dict], activos_futuros: list[dict]) -> list[dict]:
+    """activos_futuros: [{'fecha':..., 'valor': casos_activos_proyectados}, ...]"""
+    tasa_letalidad, tasa_recuperacion = calcular_tasas_historicas(serie)
+    denominador = 1 - tasa_letalidad - tasa_recuperacion
+
+    activos_previos = [r["casos_activos"] for r in serie if r.get("casos_activos") is not None]
+    activos_anterior = activos_previos[-1] if activos_previos else 0.0
+
+    resultado = []
+    for punto in activos_futuros:
+        activos_t = punto["valor"]
+        delta = activos_t - activos_anterior
+        nuevos_t = max(0.0, delta / denominador) if denominador > 0.05 else max(0.0, delta)
+        fallecidos_t = nuevos_t * tasa_letalidad
+        recuperados_t = nuevos_t * tasa_recuperacion
+        resultado.append({
+            "fecha": punto["fecha"],
+            "casos_nuevos_proyectados": nuevos_t,
+            "casos_activos_proyectados": activos_t,
+            "recuperados_proyectados": recuperados_t,
+            "fallecidos_proyectados": fallecidos_t,
+        })
+        activos_anterior = activos_t
+    return resultado
+
+
+def descomponer_proyeccion_desde_nuevos(serie: list[dict], nuevos_futuros: list[dict]) -> list[dict]:
+    """nuevos_futuros: [{'fecha':..., 'valor': casos_nuevos_proyectados}, ...]
+    (usado por el modelo de crecimiento logístico, que ya proyecta nuevos directamente)."""
+    tasa_letalidad, tasa_recuperacion = calcular_tasas_historicas(serie)
+
+    activos_previos = [r["casos_activos"] for r in serie if r.get("casos_activos") is not None]
+    activos_anterior = activos_previos[-1] if activos_previos else 0.0
+
+    resultado = []
+    for punto in nuevos_futuros:
+        nuevos_t = punto["valor"]
+        fallecidos_t = nuevos_t * tasa_letalidad
+        recuperados_t = nuevos_t * tasa_recuperacion
+        activos_t = max(0.0, activos_anterior + nuevos_t - fallecidos_t - recuperados_t)
+        resultado.append({
+            "fecha": punto["fecha"],
+            "casos_nuevos_proyectados": nuevos_t,
+            "casos_activos_proyectados": activos_t,
+            "recuperados_proyectados": recuperados_t,
+            "fallecidos_proyectados": fallecidos_t,
+        })
+        activos_anterior = activos_t
+    return resultado

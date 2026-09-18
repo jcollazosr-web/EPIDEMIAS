@@ -23,6 +23,7 @@ import db
 import calculos
 import proyecciones
 import clasificacion
+import reportes
 import sugerencia_modelos as sm
 
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
@@ -98,6 +99,11 @@ _restaurar_sesion_desde_cookie()
 # ---------------------------------------------------------------------
 def pantalla_login():
     st.title("🦠 Sistema de Seguimiento de Epidemia")
+    st.markdown(
+        f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💙 Apoya a la Fundación Juan Manuel Collazos — Donar</a>',
+        unsafe_allow_html=True,
+    )
+    st.write("")
     tab_login, tab_registro, tab_recuperar = st.tabs(
         ["Iniciar sesión", "Crear cuenta", "Olvidé mi contraseña"]
     )
@@ -215,106 +221,106 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
 
 
 def seccion_lateral_captura(usuario_id: str, brote_id: int):
-    st.markdown("### ✍️ Registrar un caso")
-    db.asegurar_vias_por_defecto(usuario_id)
-    vias = db.listar_vias(usuario_id)
-    nombres_vias = {v["nombre"]: v["id"] for v in vias}
+    with st.expander("✍️ Registrar un caso", expanded=False):
+        db.asegurar_vias_por_defecto(usuario_id)
+        vias = db.listar_vias(usuario_id)
+        nombres_vias = {v["nombre"]: v["id"] for v in vias}
 
-    with st.popover("+ Añadir nueva vía de contagio"):
-        nueva_via = st.text_input("Nombre de la vía", key="nueva_via_input")
-        if st.button("Guardar vía"):
-            if nueva_via.strip():
-                db.crear_via(usuario_id, nueva_via.strip())
-                st.rerun()
+        with st.popover("+ Añadir nueva vía de contagio"):
+            nueva_via = st.text_input("Nombre de la vía", key="nueva_via_input")
+            if st.button("Guardar vía"):
+                if nueva_via.strip():
+                    db.crear_via(usuario_id, nueva_via.strip())
+                    st.rerun()
 
-    st.caption("Ubicación (se geocodifica automáticamente con OpenStreetMap)")
-    pais = st.text_input("País", value="Colombia", key="ubic_pais")
-    departamento = st.text_input("Departamento", key="ubic_depto")
-    ciudad = st.text_input("Ciudad", key="ubic_ciudad")
-    barrio = st.text_input("Barrio (opcional)", key="ubic_barrio")
+        st.caption("Ubicación (se geocodifica automáticamente con OpenStreetMap)")
+        pais = st.text_input("País", value="Colombia", key="ubic_pais")
+        departamento = st.text_input("Departamento", key="ubic_depto")
+        ciudad = st.text_input("Ciudad", key="ubic_ciudad")
+        barrio = st.text_input("Barrio (opcional)", key="ubic_barrio")
 
-    with st.form("form_captura"):
-        fecha_sel = st.date_input("Fecha", value=date.today(), format="DD/MM/YYYY")
-        via_sel_nombre = st.selectbox("Vía de contagio", options=list(nombres_vias.keys()))
-        casos_nuevos = st.number_input("Casos nuevos", min_value=0, step=1)
-        fallecidos = st.number_input("Fallecidos", min_value=0, step=1)
-        recuperados = st.number_input("Recuperados", min_value=0, step=1)
-        guardar = st.form_submit_button("Guardar registro")
+        with st.form("form_captura"):
+            fecha_sel = st.date_input("Fecha", value=date.today(), format="DD/MM/YYYY")
+            via_sel_nombre = st.selectbox("Vía de contagio", options=list(nombres_vias.keys()))
+            casos_nuevos = st.number_input("Casos nuevos", min_value=0, step=1)
+            fallecidos = st.number_input("Fallecidos", min_value=0, step=1)
+            recuperados = st.number_input("Recuperados", min_value=0, step=1)
+            guardar = st.form_submit_button("Guardar registro")
 
-    if guardar:
-        via_id = nombres_vias.get(via_sel_nombre)
-        ubicacion_id = None
-        if pais.strip():
-            ubicacion = db.obtener_o_crear_ubicacion(usuario_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip())
-            ubicacion_id = ubicacion.get("id")
-            if ubicacion and ubicacion.get("latitud") is None:
-                st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
+        if guardar:
+            via_id = nombres_vias.get(via_sel_nombre)
+            ubicacion_id = None
+            if pais.strip():
+                ubicacion = db.obtener_o_crear_ubicacion(usuario_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip())
+                ubicacion_id = ubicacion.get("id")
+                if ubicacion and ubicacion.get("latitud") is None:
+                    st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
 
-        db.upsert_registro(
-            usuario_id=usuario_id, brote_id=brote_id, fecha=fecha_sel, via_contagio_id=via_id,
-            ubicacion_id=ubicacion_id, casos_nuevos=int(casos_nuevos), fallecidos=int(fallecidos),
-            recuperados=int(recuperados),
-        )
-        st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
-        st.rerun()
+            db.upsert_registro(
+                usuario_id=usuario_id, brote_id=brote_id, fecha=fecha_sel, via_contagio_id=via_id,
+                ubicacion_id=ubicacion_id, casos_nuevos=int(casos_nuevos), fallecidos=int(fallecidos),
+                recuperados=int(recuperados),
+            )
+            st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
+            st.rerun()
 
 
 def seccion_lateral_carga_masiva(usuario_id: str, brote_id: int):
-    st.markdown("### 📤 Cargar datos desde Excel/CSV")
-    st.caption(
-        "Columnas esperadas: **fecha, casos_nuevos, fallecidos, recuperados** "
-        "(fallecidos/recuperados opcionales, se asumen 0). Opcionales: "
-        "**via, pais, departamento, ciudad, barrio**."
-    )
-    archivo = st.file_uploader("Selecciona un archivo", type=["csv", "xlsx", "xls"], key="uploader_masivo")
+    with st.expander("📤 Cargar datos desde Excel/CSV", expanded=False):
+        st.caption(
+            "Columnas esperadas: **fecha, casos_nuevos, fallecidos, recuperados** "
+            "(fallecidos/recuperados opcionales, se asumen 0). Opcionales: "
+            "**via, pais, departamento, ciudad, barrio**."
+        )
+        archivo = st.file_uploader("Selecciona un archivo", type=["csv", "xlsx", "xls"], key="uploader_masivo")
 
-    if archivo is not None:
-        try:
-            if archivo.name.endswith(".csv"):
-                df_subida = pd.read_csv(archivo)
-            else:
-                df_subida = pd.read_excel(archivo)
-        except Exception as e:
-            st.error(f"No se pudo leer el archivo: {e}")
-            return
+        if archivo is not None:
+            try:
+                if archivo.name.endswith(".csv"):
+                    df_subida = pd.read_csv(archivo)
+                else:
+                    df_subida = pd.read_excel(archivo)
+            except Exception as e:
+                st.error(f"No se pudo leer el archivo: {e}")
+                return
 
-        df_subida.columns = [c.strip().lower() for c in df_subida.columns]
-        st.dataframe(df_subida.head(10), use_container_width=True)
+            df_subida.columns = [c.strip().lower() for c in df_subida.columns]
+            st.dataframe(df_subida.head(10), use_container_width=True)
 
-        columnas_requeridas = {"fecha", "casos_nuevos"}
-        if not columnas_requeridas.issubset(set(df_subida.columns)):
-            st.error(f"Faltan columnas obligatorias: {columnas_requeridas - set(df_subida.columns)}")
-            return
+            columnas_requeridas = {"fecha", "casos_nuevos"}
+            if not columnas_requeridas.issubset(set(df_subida.columns)):
+                st.error(f"Faltan columnas obligatorias: {columnas_requeridas - set(df_subida.columns)}")
+                return
 
-        if st.button(f"Importar {len(df_subida)} filas a este brote"):
-            filas = []
-            for _, fila in df_subida.iterrows():
-                try:
-                    fecha_val = pd.to_datetime(fila["fecha"]).date()
-                except Exception:
-                    continue
-                filas.append({
-                    "fecha": fecha_val,
-                    "casos_nuevos": fila.get("casos_nuevos", 0),
-                    "fallecidos": fila.get("fallecidos", 0) if pd.notna(fila.get("fallecidos", 0)) else 0,
-                    "recuperados": fila.get("recuperados", 0) if pd.notna(fila.get("recuperados", 0)) else 0,
-                    "via_nombre": str(fila.get("via", "")) if pd.notna(fila.get("via", "")) else "",
-                    "ubicacion": {
-                        "pais": str(fila.get("pais", "")) if pd.notna(fila.get("pais", "")) else "",
-                        "departamento": str(fila.get("departamento", "")) if pd.notna(fila.get("departamento", "")) else "",
-                        "ciudad": str(fila.get("ciudad", "")) if pd.notna(fila.get("ciudad", "")) else "",
-                        "barrio": str(fila.get("barrio", "")) if pd.notna(fila.get("barrio", "")) else "",
-                    } if "pais" in df_subida.columns else None,
-                })
+            if st.button(f"Importar {len(df_subida)} filas a este brote"):
+                filas = []
+                for _, fila in df_subida.iterrows():
+                    try:
+                        fecha_val = pd.to_datetime(fila["fecha"]).date()
+                    except Exception:
+                        continue
+                    filas.append({
+                        "fecha": fecha_val,
+                        "casos_nuevos": fila.get("casos_nuevos", 0),
+                        "fallecidos": fila.get("fallecidos", 0) if pd.notna(fila.get("fallecidos", 0)) else 0,
+                        "recuperados": fila.get("recuperados", 0) if pd.notna(fila.get("recuperados", 0)) else 0,
+                        "via_nombre": str(fila.get("via", "")) if pd.notna(fila.get("via", "")) else "",
+                        "ubicacion": {
+                            "pais": str(fila.get("pais", "")) if pd.notna(fila.get("pais", "")) else "",
+                            "departamento": str(fila.get("departamento", "")) if pd.notna(fila.get("departamento", "")) else "",
+                            "ciudad": str(fila.get("ciudad", "")) if pd.notna(fila.get("ciudad", "")) else "",
+                            "barrio": str(fila.get("barrio", "")) if pd.notna(fila.get("barrio", "")) else "",
+                        } if "pais" in df_subida.columns else None,
+                    })
 
-            with st.spinner("Importando..."):
-                resultado = db.importar_registros_masivo(usuario_id, brote_id, filas)
+                with st.spinner("Importando..."):
+                    resultado = db.importar_registros_masivo(usuario_id, brote_id, filas)
 
-            st.success(f"{resultado['exitosos']} filas importadas correctamente.")
-            if resultado["fallidos"]:
-                st.warning(f"{len(resultado['fallidos'])} filas fallaron.")
-                st.dataframe(pd.DataFrame(resultado["fallidos"]), use_container_width=True)
-            st.rerun()
+                st.success(f"{resultado['exitosos']} filas importadas correctamente.")
+                if resultado["fallidos"]:
+                    st.warning(f"{len(resultado['fallidos'])} filas fallaron.")
+                    st.dataframe(pd.DataFrame(resultado["fallidos"]), use_container_width=True)
+                st.rerun()
 
 
 def seccion_lateral_editar_eliminar(usuario_id: str, brote_id: int):
@@ -334,6 +340,31 @@ def seccion_lateral_editar_eliminar(usuario_id: str, brote_id: int):
                 st.rerun()
         if len(registros) > 20:
             st.caption(f"Mostrando 20 de {len(registros)} registros.")
+
+
+def seccion_lateral_admin(usuario_id: str):
+    if not db.es_admin(usuario_id):
+        return
+    with st.expander("🔑 Administrador"):
+        try:
+            stats = db.estadisticas_globales_admin()
+        except Exception as e:
+            st.warning(f"No se pudieron cargar las estadísticas: {e}")
+            return
+
+        st.metric("Usuarios registrados (total)", stats["total_usuarios_registrados"])
+        st.metric("Usuarios con al menos un registro", stats["usuarios_con_al_menos_un_registro"])
+        st.metric("Usuarios activos (últimos 7 días)", stats["usuarios_activos_ultimos_7_dias"])
+        st.metric("Registros diarios capturados (total)", stats["total_registros_capturados"])
+        st.metric("Casos nuevos acumulados (todos los usuarios)", stats["total_casos_nuevos_acumulados"])
+        st.metric("Fallecidos acumulados (todos los usuarios)", stats["total_fallecidos_acumulados"])
+
+        st.markdown("**Usuarios registrados**")
+        try:
+            usuarios = db.listar_usuarios_admin()
+            st.dataframe(pd.DataFrame(usuarios), use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.error(f"No se pudo obtener la lista de usuarios: {e}")
 
 
 def seccion_lateral_donacion():
@@ -380,6 +411,32 @@ def dashboard_grafico_principal(serie: list):
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(df.set_index("fecha")[["casos_activos"]])
+
+
+def dashboard_grafico_componentes(serie: list):
+    """Evolución de activos vs. recuperados y fallecidos acumulados —
+    para responder directamente '¿cómo van los recuperados y fallecidos?'"""
+    df = pd.DataFrame(serie)
+    if df.empty:
+        return
+    df["fecha"] = pd.to_datetime(df["fecha"])
+
+    st.markdown("#### Activos, recuperados y fallecidos")
+    try:
+        import plotly.graph_objects as go
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Activos",
+                                  line=dict(color=COLOR_AZUL_OSCURO, width=3)))
+        fig.add_trace(go.Scatter(x=df["fecha"], y=df["recuperados_acumulados"], name="Recuperados (acum.)",
+                                  line=dict(color="green", width=2)))
+        fig.add_trace(go.Scatter(x=df["fecha"], y=df["fallecidos_acumulados"], name="Fallecidos (acum.)",
+                                  line=dict(color="red", width=2)))
+        fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.line_chart(df.set_index("fecha")[["casos_activos", "recuperados_acumulados", "fallecidos_acumulados"]])
 
 
 def dashboard_comparacion_vias(por_via: dict):
@@ -433,7 +490,7 @@ def dashboard_tabla_y_export(serie: list, nombre_serie: str):
         )
 
 
-def seccion_proyeccion(serie: list, nombre_serie: str):
+def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str):
     st.markdown("#### Proyección a futuro")
     n_dias_disponibles = len([r for r in serie if r.get("casos_activos") is not None])
     opciones_modelo = ["Regresión log-lineal (±2σ)"]
@@ -445,15 +502,74 @@ def seccion_proyeccion(serie: list, nombre_serie: str):
     modelo_sel = st.selectbox("Modelo de proyección", options=opciones_modelo, key=f"modelo_{nombre_serie}")
     dias_futuros = st.slider("Días a proyectar", min_value=3, max_value=14, value=7, key=f"slider_{nombre_serie}")
 
+    tabla_combinada = None
+    mensaje_modelo = ""
+
     if modelo_sel.startswith("Regresión"):
         resultado = proyecciones.proyectar_regresion_log_lineal(serie, dias_futuros=dias_futuros)
         _mostrar_proyeccion_con_banda(serie, resultado, "Tasa de crecimiento diaria estimada", "tasa_crecimiento_diaria")
+        if resultado["valido"]:
+            activos_futuros = [{"fecha": p["fecha"], "valor": p["valor_central"]} for p in resultado["proyeccion"]]
+            tabla_combinada = proyecciones.descomponer_proyeccion_desde_activos(serie, activos_futuros)
+            mensaje_modelo = resultado["mensaje"]
     elif modelo_sel.startswith("ARIMA"):
         resultado = proyecciones.ajustar_arima(serie, dias_futuros=dias_futuros)
         _mostrar_proyeccion_con_banda(serie, resultado, None, None)
+        if resultado["valido"]:
+            activos_futuros = [{"fecha": p["fecha"], "valor": p["valor_central"]} for p in resultado["proyeccion"]]
+            tabla_combinada = proyecciones.descomponer_proyeccion_desde_activos(serie, activos_futuros)
+            mensaje_modelo = resultado["mensaje"]
     else:
         resultado = proyecciones.ajustar_crecimiento_logistico(serie, dias_futuros=dias_futuros)
         _mostrar_proyeccion_logistica(resultado)
+        if resultado["valido"]:
+            nuevos_futuros = [{"fecha": p["fecha"], "valor": p["casos_nuevos_proyectados"]} for p in resultado["proyeccion"]]
+            tabla_combinada = proyecciones.descomponer_proyeccion_desde_nuevos(serie, nuevos_futuros)
+            mensaje_modelo = resultado["mensaje"]
+
+    if tabla_combinada:
+        _mostrar_tabla_componentes_proyectados(tabla_combinada)
+
+        pdf_bytes = reportes.generar_pdf_reporte(brote_nombre, serie, tabla_combinada, mensaje_modelo)
+        st.download_button(
+            "📄 Exportar reporte a PDF (histórico + proyección)",
+            data=pdf_bytes,
+            file_name=f"reporte_{brote_nombre}_{date.today().isoformat()}.pdf",
+            mime="application/pdf",
+        )
+
+
+def _mostrar_tabla_componentes_proyectados(tabla_combinada: list):
+    st.markdown("##### Proyección de nuevos, activos, recuperados y fallecidos")
+    st.caption(
+        "Recuperados y fallecidos proyectados se derivan de las tasas históricas de "
+        "letalidad y recuperación observadas en este brote, aplicadas hacia adelante."
+    )
+
+    df = pd.DataFrame(tabla_combinada)
+    try:
+        import plotly.graph_objects as go
+
+        df_plot = df.copy()
+        df_plot["fecha"] = pd.to_datetime(df_plot["fecha"])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["casos_nuevos_proyectados"], name="Nuevos", line=dict(color=COLOR_CIAN, width=2)))
+        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["casos_activos_proyectados"], name="Activos", line=dict(color=COLOR_AZUL_OSCURO, width=3)))
+        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["recuperados_proyectados"], name="Recuperados", line=dict(color="green", width=2)))
+        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["fallecidos_proyectados"], name="Fallecidos", line=dict(color="red", width=2)))
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        pass
+
+    df["fecha"] = pd.to_datetime(df["fecha"]).dt.strftime("%d/%m/%Y")
+    df = df.rename(columns={
+        "fecha": "Fecha", "casos_nuevos_proyectados": "Nuevos proy.",
+        "casos_activos_proyectados": "Activos proy.", "recuperados_proyectados": "Recuperados proy.",
+        "fallecidos_proyectados": "Fallecidos proy.",
+    })
+    st.dataframe(df.round(1), use_container_width=True, hide_index=True)
 
 
 def _mostrar_proyeccion_con_banda(serie: list, resultado: dict, etiqueta_metrica, campo_metrica):
@@ -531,37 +647,6 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
         st.map(df_mapa.rename(columns={"latitud": "lat", "longitud": "lon"})[["lat", "lon"]])
 
 
-def seccion_panel_admin(usuario_id: str):
-    if not db.es_admin(usuario_id):
-        return
-    st.divider()
-    st.subheader("🔑 Panel de administrador")
-    st.caption("Visible solo para tu cuenta porque tiene rol 'admin' en la base de datos.")
-
-    try:
-        stats = db.estadisticas_globales_admin()
-    except Exception as e:
-        st.warning(f"No se pudieron cargar las estadísticas: {e}")
-        return
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Usuarios registrados (total)", stats["total_usuarios_registrados"])
-    c2.metric("Usuarios con al menos un registro", stats["usuarios_con_al_menos_un_registro"])
-    c3.metric("Usuarios activos (últimos 7 días)", stats["usuarios_activos_ultimos_7_dias"])
-
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Registros diarios capturados (total)", stats["total_registros_capturados"])
-    c5.metric("Casos nuevos acumulados (todos los usuarios)", stats["total_casos_nuevos_acumulados"])
-    c6.metric("Fallecidos acumulados (todos los usuarios)", stats["total_fallecidos_acumulados"])
-
-    with st.expander("Ver lista de usuarios registrados"):
-        try:
-            usuarios = db.listar_usuarios_admin()
-            st.dataframe(pd.DataFrame(usuarios), use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.error(f"No se pudo obtener la lista de usuarios: {e}")
-
-
 # =======================================================================
 # Enrutamiento principal
 # =======================================================================
@@ -574,10 +659,10 @@ def app_principal():
         brote = seccion_lateral_brotes(usuario["id"])
         st.divider()
         seccion_lateral_captura(usuario["id"], brote["id"])
-        st.divider()
         seccion_lateral_carga_masiva(usuario["id"], brote["id"])
-        st.divider()
         seccion_lateral_editar_eliminar(usuario["id"], brote["id"])
+        st.divider()
+        seccion_lateral_admin(usuario["id"])
         st.divider()
         seccion_lateral_donacion()
 
@@ -588,7 +673,6 @@ def app_principal():
     registros = db.obtener_registros(usuario["id"], brote_id=brote["id"])
     if not registros:
         st.info("Este brote todavía no tiene registros. Usa el panel de la izquierda para capturar el primero.")
-        seccion_panel_admin(usuario["id"])
         return
 
     por_via = calculos.recalcular_por_via(registros)
@@ -601,16 +685,15 @@ def app_principal():
 
     dashboard_kpis(serie, velocidad, fase)
     dashboard_grafico_principal(serie)
+    dashboard_grafico_componentes(serie)
     dashboard_comparacion_vias(por_via)
     dashboard_mapa(usuario["id"], brote["id"])
     dashboard_tabla_y_export(serie, vista_sel)
-    seccion_proyeccion(serie, vista_sel)
+    seccion_proyeccion(serie, vista_sel, brote["nombre"])
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
     sugerencia = sm.sugerir_modelo(len(registros), conteo_por_via)
     st.caption(sugerencia["mensaje"])
-
-    seccion_panel_admin(usuario["id"])
 
 
 # ---------------------------------------------------------------------

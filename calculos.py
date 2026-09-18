@@ -46,6 +46,9 @@ def recalcular_serie(registros: list[dict]) -> list[dict]:
             **r,
             "casos_activos": casos_activos,
             "rt_efectivo": rt,
+            "casos_acumulados": acum_casos,
+            "fallecidos_acumulados": acum_fallecidos,
+            "recuperados_acumulados": acum_recuperados,
         })
 
     return resultado

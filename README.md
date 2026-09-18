@@ -79,15 +79,28 @@ seguimiento_epidemia/
   epidemias (brotes) como quiera, cada una con su propia línea de tiempo,
   vías y ubicaciones independientes. Selector en la barra lateral.
 - **Diseño rediseñado**: todos los controles de captura, carga y edición
-  viven en la barra lateral izquierda; el cuerpo principal es un dashboard
-  de solo lectura con gráficos interactivos (Plotly).
+  viven en la barra lateral izquierda, organizados en menús desplegables;
+  el cuerpo principal es un dashboard de solo lectura con gráficos
+  interactivos (Plotly).
 - **Carga masiva desde Excel/CSV**: en la barra lateral, sube un archivo
   con columnas `fecha, casos_nuevos, fallecidos, recuperados` (y
   opcionalmente `via, pais, departamento, ciudad, barrio`).
 - **Colores de marca**: la interfaz usa la paleta del Manual de Identidad
   Corporativa de la Fundación (`.streamlit/config.toml` + CSS inline).
-- **Botón de donación**: enlaza directamente al checkout de Bold de la
-  Fundación, visible en la barra lateral.
+- **Botón de donación**: enlaza al checkout de Bold de la Fundación,
+  visible tanto en la pantalla de login como en la barra lateral.
+- **Menú "🔑 Administrador"**: todas las estadísticas globales y la lista
+  de usuarios quedaron agrupadas en un único menú desplegable en la
+  barra lateral (solo visible para cuentas con rol admin).
+- **Gráfica de activos/recuperados/fallecidos**: además del gráfico de
+  casos activos y nuevos, ahora se ve la evolución acumulada de
+  recuperados y fallecidos.
+- **Proyección completa**: debajo del gráfico de proyección aparece una
+  tabla y gráfico con los 4 componentes proyectados (nuevos, activos,
+  recuperados, fallecidos), derivados de las tasas históricas de
+  letalidad/recuperación del propio brote.
+- **Exportar reporte a PDF**: botón de descarga con el histórico
+  reciente, el gráfico y la tabla de proyección completa.
 - **Bug corregido**: `admin_listar_usuarios()` fallaba por una discrepancia
   de tipos (`varchar` vs `text`) al leer `auth.users.email` — ya corregido
   en la base de datos y en `schema.sql`.
