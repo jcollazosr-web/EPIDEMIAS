@@ -179,6 +179,26 @@ o ubicación) sigue restringida al dueño del catálogo.
 - **Manual de uso no técnico** (`MANUAL_DE_USO.md`), enlazado también
   dentro de la app en la barra lateral ("❓ Cómo usar esta app").
 
+### Lote: rediseño de marca + edición + interactividad (EpiScan)
+- **App renombrada a "EpiScan"** (subtítulo: "Sistema de vigilancia
+  epidemiológica"), logo recortado y en tamaño más discreto.
+- **Ícono personalizado del chatbot**: robot con pensamiento flotante,
+  dibujado con los colores de marca (`assets/robot_pensamiento.png`).
+- **Edición real de registros** (antes solo se podía eliminar): botón
+  ✏️ abre un formulario para modificar fecha, vía, casos, fallecidos
+  y recuperados de un registro existente.
+- **Filtros como botones de clic** (`st.pills`, con respaldo a
+  checkboxes en versiones antiguas de Streamlit) en vez de menús
+  desplegables, en los 3 gráficos principales.
+- **Barra de desplazamiento simplificada**: se quitaron los botones
+  7d/30d/90d/Todo (confundían junto a la vista previa en miniatura),
+  dejando una barra delgada aplicada consistentemente a TODOS los
+  gráficos de series temporales.
+- **Gráfico de activos/recuperados/fallecidos** ahora incluye también
+  las series por día (no solo acumuladas), todas filtrables.
+- **Botón "📊 Análisis descriptivo"** bajo los 3 gráficos principales,
+  conectado a la IA (misma clave que gestiona el admin).
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

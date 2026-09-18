@@ -367,6 +367,15 @@ def eliminar_registro(registro_id: int) -> None:
     client.table("registros_diarios").delete().eq("id", registro_id).execute()
 
 
+def actualizar_registro(registro_id: int, **campos) -> dict:
+    """Actualiza un registro existente por su id (para edición desde la
+    interfaz — a diferencia de upsert_registro, no depende de que la
+    combinación fecha/vía/ubicación se mantenga igual)."""
+    client = get_client()
+    res = client.table("registros_diarios").update(campos).eq("id", registro_id).execute()
+    return res.data[0] if res.data else {}
+
+
 def contar_registros_totales(usuario_id: str, brote_id: Optional[int] = None) -> int:
     return len(obtener_registros(usuario_id, brote_id=brote_id))
 

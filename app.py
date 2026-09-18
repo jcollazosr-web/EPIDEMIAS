@@ -31,6 +31,7 @@ import sugerencia_modelos as sm
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
 URL_BASE_APP = "https://epidemias-jmcr.streamlit.app"
 RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
+RUTA_ICONO_ROBOT = os.path.join(os.path.dirname(__file__), "assets", "robot_pensamiento.png")
 
 # Colores del manual de marca (Fundación Juan Manuel Collazos)
 COLOR_AZUL_OSCURO = "#000d5c"
@@ -38,7 +39,7 @@ COLOR_VIOLETA = "#9e33b2"
 COLOR_CIAN = "#00d6ff"
 COLOR_AZUL_COMPLEMENTARIO = "#303896"
 
-st.set_page_config(page_title="Seguimiento de Epidemia", page_icon=RUTA_LOGO, layout="wide")
+st.set_page_config(page_title="EpiScan", page_icon=RUTA_LOGO, layout="wide")
 
 st.markdown(
     f"""
@@ -117,9 +118,10 @@ _restaurar_sesion_desde_cookie()
 def pantalla_login():
     col_logo, col_titulo = st.columns([1, 3])
     with col_logo:
-        st.image(RUTA_LOGO, width=180)
+        st.image(RUTA_LOGO, width=140)
     with col_titulo:
-        st.title("Sistema de Seguimiento de Epidemia")
+        st.title("EpiScan")
+        st.caption("Sistema de vigilancia epidemiológica")
     st.markdown(
         f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💙 Apoya a la Fundación Juan Manuel Collazos — Donar</a>',
         unsafe_allow_html=True,
@@ -194,7 +196,9 @@ def pantalla_login():
 # BARRA LATERAL — todo lo que es entrada/control de datos
 # =======================================================================
 def barra_lateral_sesion(usuario: dict):
-    st.image(RUTA_LOGO, use_container_width=True)
+    col_logo_sb, _ = st.columns([2, 1])
+    with col_logo_sb:
+        st.image(RUTA_LOGO, width=130)
     st.markdown(f"**Sesión:** {usuario['email']}")
 
     with st.expander("❓ Cómo usar esta app"):
@@ -466,21 +470,55 @@ def seccion_lateral_carga_masiva(usuario_id: str, brote: dict):
             st.rerun()
 
 
-def seccion_lateral_editar_eliminar(usuario_id: str, brote_id: int):
-    with st.expander("🗑️ Editar o eliminar registros"):
+def seccion_lateral_editar_eliminar(usuario_id: str, brote: dict):
+    brote_id = brote["id"]
+    catalogo_id = brote["usuario_id"]
+
+    with st.expander("✏️ Editar o eliminar registros"):
         registros = db.obtener_registros(usuario_id, brote_id=brote_id)
         if not registros:
             st.caption("No hay registros en este brote todavía.")
             return
+
+        vias = db.listar_vias(catalogo_id)
+        nombres_vias = {v["nombre"]: v["id"] for v in vias}
+        ids_a_nombres_vias = {v["id"]: v["nombre"] for v in vias}
+
         recientes = sorted(registros, key=lambda r: r["fecha"], reverse=True)[:20]
         for r in recientes:
             nombre_via = (r.get("vias_contagio") or {}).get("nombre", "Sin vía")
             fecha_legible = pd.to_datetime(r["fecha"]).strftime("%d/%m/%Y")
-            c1, c2 = st.columns([4, 1])
+
+            c1, c2, c3 = st.columns([3, 1, 1])
             c1.caption(f"{fecha_legible} — {nombre_via} — Nuevos: {r['casos_nuevos']}")
-            if c2.button("🗑️", key=f"del_{r['id']}"):
+            if c2.button("✏️", key=f"edit_{r['id']}", help="Editar este registro"):
+                st.session_state[f"editando_{r['id']}"] = not st.session_state.get(f"editando_{r['id']}", False)
+            if c3.button("🗑️", key=f"del_{r['id']}", help="Eliminar este registro"):
                 db.eliminar_registro(r["id"])
                 st.rerun()
+
+            if st.session_state.get(f"editando_{r['id']}"):
+                with st.form(f"form_editar_{r['id']}"):
+                    nueva_fecha = st.date_input("Fecha", value=pd.to_datetime(r["fecha"]).date(), format="DD/MM/YYYY", key=f"fecha_edit_{r['id']}")
+                    via_actual = ids_a_nombres_vias.get(r.get("via_contagio_id"), list(nombres_vias.keys())[0] if nombres_vias else "")
+                    opciones_via = list(nombres_vias.keys())
+                    nueva_via = st.selectbox("Vía de contagio", options=opciones_via,
+                                              index=opciones_via.index(via_actual) if via_actual in opciones_via else 0,
+                                              key=f"via_edit_{r['id']}")
+                    nuevos_casos = st.number_input("Casos nuevos", min_value=0, value=int(r["casos_nuevos"]), step=1, key=f"nuevos_edit_{r['id']}")
+                    nuevos_fallecidos = st.number_input("Fallecidos", min_value=0, value=int(r["fallecidos"]), step=1, key=f"fall_edit_{r['id']}")
+                    nuevos_recuperados = st.number_input("Recuperados", min_value=0, value=int(r["recuperados"]), step=1, key=f"rec_edit_{r['id']}")
+                    guardar_edicion = st.form_submit_button("Guardar cambios")
+
+                if guardar_edicion:
+                    db.actualizar_registro(
+                        r["id"], fecha=nueva_fecha.isoformat(), via_contagio_id=nombres_vias.get(nueva_via),
+                        casos_nuevos=int(nuevos_casos), fallecidos=int(nuevos_fallecidos), recuperados=int(nuevos_recuperados),
+                    )
+                    st.session_state[f"editando_{r['id']}"] = False
+                    st.success("Registro actualizado.")
+                    st.rerun()
+
         if len(registros) > 20:
             st.caption(f"Mostrando 20 de {len(registros)} registros.")
 
@@ -566,20 +604,44 @@ def dashboard_kpis(serie: list, velocidad: dict, fase: dict):
 
 
 def _aplicar_interactividad_tiempo(fig):
-    """Agrega scroll/zoom en el eje de tiempo: selector de rango (7d/30d/todo)
-    y una barra deslizante debajo del gráfico para navegar el histórico."""
-    fig.update_xaxes(
-        rangeslider_visible=True,
-        rangeselector=dict(
-            buttons=[
-                dict(count=7, label="7d", step="day", stepmode="backward"),
-                dict(count=30, label="30d", step="day", stepmode="backward"),
-                dict(count=90, label="90d", step="day", stepmode="backward"),
-                dict(step="all", label="Todo"),
-            ]
-        ),
-    )
+    """Barra de desplazamiento simple y delgada debajo del gráfico, para
+    recorrer el histórico. Se quitaron los botones 7d/30d/90d/Todo: junto
+    con la vista previa en miniatura resultaban confusos — la barra sola,
+    más delgada, es más clara para arrastrar y hacer zoom."""
+    fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.06))
     return fig
+
+
+def _filtro_series(etiqueta: str, opciones: list, key: str) -> list:
+    """Filtro de series como botones en los que se hace clic (no un menú
+    desplegable) — más intuitivo para elegir qué mostrar en un gráfico."""
+    try:
+        seleccion = st.pills(etiqueta, options=opciones, default=opciones, selection_mode="multi", key=key)
+        return list(seleccion) if seleccion else []
+    except AttributeError:
+        # Versión de Streamlit sin st.pills todavía: se usan checkboxes
+        # en fila como alternativa, igual de "clic directo" sin menú.
+        st.caption(etiqueta)
+        columnas = st.columns(len(opciones))
+        return [op for op, col in zip(opciones, columnas) if col.checkbox(op, value=True, key=f"{key}_{op}")]
+
+
+def _boton_analisis_descriptivo(titulo_grafico: str, resumen_datos: str, key: str):
+    """Botón reutilizable bajo cualquier gráfico: genera un análisis
+    descriptivo en palabras simples usando la clave de IA del admin."""
+    if st.button("📊 Análisis descriptivo", key=f"analisis_{key}"):
+        try:
+            api_key = db.obtener_configuracion("ANTHROPIC_API_KEY")
+        except Exception:
+            api_key = None
+        if not api_key:
+            api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+        with st.spinner("Analizando..."):
+            resultado = interpretacion.generar_analisis_descriptivo(titulo_grafico, resumen_datos, api_key)
+        if not resultado["valido"]:
+            st.info(resultado["mensaje"])
+        else:
+            st.markdown(resultado["texto"])
 
 
 def dashboard_grafico_principal(serie: list):
@@ -590,10 +652,7 @@ def dashboard_grafico_principal(serie: list):
     df["fecha"] = pd.to_datetime(df["fecha"])
 
     series_disponibles = {"Casos activos": "casos_activos", "Casos nuevos": "casos_nuevos"}
-    seleccion = st.multiselect(
-        "Mostrar en el gráfico:", options=list(series_disponibles.keys()),
-        default=list(series_disponibles.keys()), key="filtro_grafico_principal",
-    )
+    seleccion = _filtro_series("Mostrar en el gráfico:", list(series_disponibles.keys()), key="filtro_grafico_principal")
 
     try:
         import plotly.graph_objects as go
@@ -618,36 +677,61 @@ def dashboard_grafico_principal(serie: list):
     except ImportError:
         st.line_chart(df.set_index("fecha")[["casos_activos"]])
 
+    ultimo = df.iloc[-1]
+    resumen = f"Casos activos actuales: {ultimo['casos_activos']}. Casos nuevos del último día: {ultimo['casos_nuevos']}. Total de días con datos: {len(df)}."
+    _boton_analisis_descriptivo("Casos activos y nuevos", resumen, key="principal")
+
 
 def dashboard_grafico_componentes(serie: list):
-    """Evolución de activos vs. recuperados y fallecidos acumulados —
-    para responder directamente '¿cómo van los recuperados y fallecidos?'"""
+    """Evolución de activos, y de recuperados/fallecidos tanto por día
+    como acumulados — para responder '¿cómo van los recuperados y
+    fallecidos?' tanto en el momento como en total."""
     df = pd.DataFrame(serie)
     if df.empty:
         return
     df["fecha"] = pd.to_datetime(df["fecha"])
 
     st.markdown("#### Activos, recuperados y fallecidos")
-    series_disponibles = {"Activos": "casos_activos", "Recuperados (acum.)": "recuperados_acumulados", "Fallecidos (acum.)": "fallecidos_acumulados"}
-    seleccion = st.multiselect(
-        "Mostrar en el gráfico:", options=list(series_disponibles.keys()),
-        default=list(series_disponibles.keys()), key="filtro_grafico_componentes",
+    series_disponibles = {
+        "Activos": "casos_activos",
+        "Recuperados por día": "recuperados",
+        "Fallecidos por día": "fallecidos",
+        "Recuperados (acumulado)": "recuperados_acumulados",
+        "Fallecidos (acumulado)": "fallecidos_acumulados",
+    }
+    seleccion = _filtro_series(
+        "Mostrar en el gráfico:", list(series_disponibles.keys()), key="filtro_grafico_componentes",
     )
 
     try:
         import plotly.graph_objects as go
 
-        colores = {"Activos": COLOR_AZUL_OSCURO, "Recuperados (acum.)": "green", "Fallecidos (acum.)": "red"}
+        colores = {
+            "Activos": COLOR_AZUL_OSCURO, "Recuperados por día": "mediumseagreen", "Fallecidos por día": "salmon",
+            "Recuperados (acumulado)": "green", "Fallecidos (acumulado)": "red",
+        }
         fig = go.Figure()
         for nombre in seleccion:
             campo = series_disponibles[nombre]
-            fig.add_trace(go.Scatter(x=df["fecha"], y=df[campo], name=nombre, line=dict(color=colores[nombre], width=2 if nombre != "Activos" else 3)))
+            es_diario = "por día" in nombre
+            if es_diario:
+                fig.add_trace(go.Bar(x=df["fecha"], y=df[campo], name=nombre, marker_color=colores[nombre], opacity=0.6))
+            else:
+                fig.add_trace(go.Scatter(x=df["fecha"], y=df[campo], name=nombre, line=dict(color=colores[nombre], width=3 if nombre == "Activos" else 2)))
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
-                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02), barmode="overlay")
         fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         st.line_chart(df.set_index("fecha")[[series_disponibles[n] for n in seleccion]] if seleccion else df.set_index("fecha")[["casos_activos"]])
+
+    ultimo = df.iloc[-1]
+    resumen = (
+        f"Casos activos: {ultimo['casos_activos']}. Recuperados acumulados: {ultimo['recuperados_acumulados']}. "
+        f"Fallecidos acumulados: {ultimo['fallecidos_acumulados']}. Recuperados del último día: {ultimo['recuperados']}. "
+        f"Fallecidos del último día: {ultimo['fallecidos']}."
+    )
+    _boton_analisis_descriptivo("Activos, recuperados y fallecidos", resumen, key="componentes")
 
 
 def dashboard_comparacion_vias(por_via: dict):
@@ -677,6 +761,10 @@ def dashboard_comparacion_vias(por_via: dict):
         }).round(3),
         use_container_width=True, hide_index=True,
     )
+
+    mas_rapida = df_comp.iloc[0]
+    resumen = f"Vía con mayor velocidad de crecimiento: {mas_rapida['via']} (tasa r = {mas_rapida['tasa_r']:.3f}). Comparación completa: {df_comp.to_dict('records')}"
+    _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias")
 
 
 def dashboard_tabla_y_export(serie: list, nombre_serie: str):
@@ -758,18 +846,26 @@ def _mostrar_tabla_componentes_proyectados(tabla_combinada: list):
     )
 
     df = pd.DataFrame(tabla_combinada)
+    series_disponibles = {
+        "Nuevos": "casos_nuevos_proyectados", "Activos": "casos_activos_proyectados",
+        "Recuperados": "recuperados_proyectados", "Fallecidos": "fallecidos_proyectados",
+    }
+    seleccion = _filtro_series("Mostrar en el gráfico:", list(series_disponibles.keys()), key="filtro_proyeccion_componentes")
+
     try:
         import plotly.graph_objects as go
 
+        colores = {"Nuevos": COLOR_CIAN, "Activos": COLOR_AZUL_OSCURO, "Recuperados": "green", "Fallecidos": "red"}
         df_plot = df.copy()
         df_plot["fecha"] = pd.to_datetime(df_plot["fecha"])
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["casos_nuevos_proyectados"], name="Nuevos", line=dict(color=COLOR_CIAN, width=2)))
-        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["casos_activos_proyectados"], name="Activos", line=dict(color=COLOR_AZUL_OSCURO, width=3)))
-        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["recuperados_proyectados"], name="Recuperados", line=dict(color="green", width=2)))
-        fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot["fallecidos_proyectados"], name="Fallecidos", line=dict(color="red", width=2)))
+        for nombre in seleccion:
+            campo = series_disponibles[nombre]
+            fig.add_trace(go.Scatter(x=df_plot["fecha"], y=df_plot[campo], name=nombre,
+                                      line=dict(color=colores[nombre], width=3 if nombre == "Activos" else 2)))
         fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        fig = _aplicar_interactividad_tiempo(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
         pass
@@ -949,6 +1045,7 @@ def seccion_comparar_brotes(usuario_id: str, brote_actual_id: int):
                 margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
+            fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.06))
             st.plotly_chart(fig, use_container_width=True)
         except ImportError:
             st.info("Instala 'plotly' para ver la comparación.")
@@ -1008,7 +1105,14 @@ def seccion_subregistro(serie: list, tipo_via_actual: str = None):
 
 
 def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
-    with st.expander("🤖 ¿No entiendes la gráfica? Pídele una explicación a la IA"):
+    col_icono, col_titulo = st.columns([1, 5])
+    with col_icono:
+        st.image(RUTA_ICONO_ROBOT, width=90)
+    with col_titulo:
+        st.markdown("**¿No entiendes la gráfica?**")
+        st.caption("Pídele una explicación en palabras simples a la IA.")
+
+    with st.expander("Abrir analista IA"):
         # Primero busca la clave configurada por el admin (aplica para
         # todos); si no existe, cae a los Secrets de Streamlit (por si
         # se configuró a la manera antigua).
@@ -1085,13 +1189,14 @@ def app_principal():
         st.divider()
         seccion_lateral_captura(usuario["id"], brote)
         seccion_lateral_carga_masiva(usuario["id"], brote)
-        seccion_lateral_editar_eliminar(usuario["id"], brote["id"])
+        seccion_lateral_editar_eliminar(usuario["id"], brote)
         st.divider()
         seccion_lateral_admin(usuario["id"])
         st.divider()
         seccion_lateral_donacion()
 
-    st.title(f"🦠 Dashboard — {brote['nombre']}")
+    st.title(f"EpiScan — {brote['nombre']}")
+    st.caption("Sistema de vigilancia epidemiológica")
     if brote.get("descripcion"):
         st.caption(brote["descripcion"])
 
@@ -1144,7 +1249,8 @@ def pantalla_dashboard_publico(token: str):
         st.error(f"Este enlace no es válido o fue revocado por el dueño del brote. ({e})")
         return
 
-    st.title(f"🦠 {datos.get('nombre', 'Brote')} — Vista pública")
+    st.title(f"EpiScan — {datos.get('nombre', 'Brote')} (vista pública)")
+    st.caption("Sistema de vigilancia epidemiológica")
     if datos.get("descripcion"):
         st.caption(datos["descripcion"])
     st.info("Estás viendo un dashboard público de solo lectura, compartido por el equipo de seguimiento.")
