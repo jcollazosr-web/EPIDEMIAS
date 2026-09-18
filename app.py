@@ -81,6 +81,19 @@ _cookies_actuales = cookie_manager.get_all() or {}
 def _restaurar_sesion_desde_cookie():
     if "usuario" in st.session_state:
         return
+    if st.session_state.pop("_acabamos_de_cerrar_sesion", False):
+        # Justo después de cerrar sesión, las cookies del navegador pueden
+        # tardar un round-trip en reflejar el borrado (limitación conocida
+        # de los componentes de cookies en Streamlit). Si intentamos
+        # restaurar la sesión en este MISMO rerun, podemos revivir una
+        # sesión que el propio usuario acaba de cerrar — y como el
+        # refresh token ya fue invalidado en el servidor por sign_out(),
+        # esa restauración queda en un estado inconsistente que provoca
+        # errores más adelante (RLS "anon" en llamadas subsecuentes).
+        # Solución: NUNCA restaurar en el rerun inmediatamente posterior
+        # a un logout — para entonces el navegador ya habrá completado el
+        # borrado real de las cookies en cualquier rerun futuro.
+        return
     access_token = _cookies_actuales.get("access_token")
     refresh_token = _cookies_actuales.get("refresh_token")
     if access_token and refresh_token:
@@ -216,13 +229,29 @@ def barra_lateral_sesion(usuario: dict):
         cookie_manager.delete("refresh_token", key="del_refresh_token_logout")
         del st.session_state["usuario"]
         st.session_state.pop("_supabase_client", None)
+        st.session_state["_acabamos_de_cerrar_sesion"] = True
         st.rerun()
 
 
 def seccion_lateral_brotes(usuario_id: str) -> dict:
     st.markdown("### 🦠 Brote activo")
-    db.asegurar_brote_por_defecto(usuario_id)
-    brotes = db.listar_brotes(usuario_id)
+    try:
+        db.asegurar_brote_por_defecto(usuario_id)
+        brotes = db.listar_brotes(usuario_id)
+    except Exception:
+        # Si la sesión quedó en un estado inconsistente (ej. justo tras
+        # cerrar sesión, o un token vencido a mitad de una acción), no
+        # dejamos que la app se caiga con un traceback — se limpia todo
+        # y se pide iniciar sesión de nuevo, que es la solución real.
+        st.error("Tu sesión ya no es válida. Por favor inicia sesión de nuevo.")
+        db.cerrar_sesion()
+        st.session_state.pop("usuario", None)
+        st.session_state.pop("_supabase_client", None)
+        st.session_state["_acabamos_de_cerrar_sesion"] = True
+        if st.button("Volver a iniciar sesión"):
+            st.rerun()
+        st.stop()
+
     etiquetas = {
         f"{b['nombre']}" + ("" if b.get("es_dueno", b["usuario_id"] == usuario_id) else " (colaborador)"): b
         for b in brotes
