@@ -146,6 +146,13 @@ o ubicación) sigue restringida al dueño del catálogo.
   registrar el borrado en cascada de sus registros usando un `brote_id`
   que ya no existía (violación de llave foránea). El trigger ahora
   verifica que el brote siga existiendo antes de auditar un borrado.
+- **Bug crítico de concurrencia**: el cliente de Supabase estaba cacheado
+  con `@st.cache_resource`, compartiendo UN SOLO objeto entre TODOS los
+  usuarios del servidor. Cerrar sesión (o cualquier cambio de auth) podía
+  afectar a otras sesiones activas en el mismo proceso, o dejar una
+  sesión "zombie" que fallaba con 401 en la siguiente operación (esto
+  fue lo que causó el error al intentar cerrar sesión). Ahora cada
+  sesión de navegador tiene su propio cliente en `st.session_state`.
 
 ## Estado actual de los modelos predictivos
 

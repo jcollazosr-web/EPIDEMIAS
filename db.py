@@ -17,21 +17,29 @@ from supabase import create_client, Client
 # ---------------------------------------------------------------------
 # Conexión
 # ---------------------------------------------------------------------
-@st.cache_resource
 def get_client() -> Client:
     """
-    Crea (una sola vez por proceso) el cliente de Supabase.
-    Las credenciales se leen de variables de entorno o de
-    st.secrets (recomendado en Streamlit Cloud).
+    Cliente de Supabase — UNO POR SESIÓN DE NAVEGADOR, no compartido
+    entre usuarios. Antes este cliente vivía en @st.cache_resource
+    directamente, lo cual crea UN SOLO objeto para TODO el servidor:
+    cuando un usuario cerraba sesión (auth.sign_out()), esa acción
+    afectaba al cliente compartido y podía desloguear a otros usuarios
+    conectados al mismo proceso, o dejar sesiones "zombie" que fallan
+    con 401 en la siguiente operación. Guardarlo en st.session_state
+    asegura que cada persona tenga su propia sesión independiente.
     """
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL"))
-    key = st.secrets.get("SUPABASE_ANON_KEY", os.environ.get("SUPABASE_ANON_KEY"))
-    if not url or not key:
-        raise RuntimeError(
-            "Faltan SUPABASE_URL / SUPABASE_ANON_KEY. "
-            "Defínelas en .streamlit/secrets.toml o como variables de entorno."
-        )
-    return create_client(url, key)
+    if "_supabase_client" not in st.session_state:
+        url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL"))
+        key = st.secrets.get("SUPABASE_ANON_KEY", os.environ.get("SUPABASE_ANON_KEY"))
+        if not url or not key:
+            raise RuntimeError(
+                "Faltan SUPABASE_URL / SUPABASE_ANON_KEY. "
+                "Defínelas en .streamlit/secrets.toml o como variables de entorno."
+            )
+        # Se crea un cliente NUEVO por sesión (no se reutiliza el objeto
+        # cacheado) para que su estado interno de auth sea 100% propio.
+        st.session_state["_supabase_client"] = create_client(url, key)
+    return st.session_state["_supabase_client"]
 
 
 def set_auth_session(access_token: str, refresh_token: str) -> None:

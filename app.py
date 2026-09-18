@@ -90,6 +90,7 @@ def _restaurar_sesion_desde_cookie():
         except Exception:
             cookie_manager.delete("access_token", key="del_access_token_expirado")
             cookie_manager.delete("refresh_token", key="del_refresh_token_expirado")
+            st.session_state.pop("_supabase_client", None)
 
 
 _restaurar_sesion_desde_cookie()
@@ -197,6 +198,7 @@ def barra_lateral_sesion(usuario: dict):
         cookie_manager.delete("access_token", key="del_access_token_logout")
         cookie_manager.delete("refresh_token", key="del_refresh_token_logout")
         del st.session_state["usuario"]
+        st.session_state.pop("_supabase_client", None)
         st.rerun()
 
 
