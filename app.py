@@ -205,7 +205,7 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
     db.asegurar_brote_por_defecto(usuario_id)
     brotes = db.listar_brotes(usuario_id)
     etiquetas = {
-        f"{b['nombre']}" + ("" if b["es_dueno"] else " (colaborador)"): b
+        f"{b['nombre']}" + ("" if b.get("es_dueno", b["usuario_id"] == usuario_id) else " (colaborador)"): b
         for b in brotes
     }
 
@@ -222,7 +222,7 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
             st.success(f"Brote '{nombre_nuevo}' creado.")
             st.rerun()
 
-    if brote["es_dueno"]:
+    if brote.get("es_dueno", brote["usuario_id"] == usuario_id):
         with st.expander("👥 Colaboradores de este brote"):
             with st.form("form_invitar_colaborador"):
                 correo_colab = st.text_input("Correo del colaborador (debe tener cuenta ya creada)")
