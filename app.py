@@ -81,18 +81,17 @@ _cookies_actuales = cookie_manager.get_all() or {}
 def _restaurar_sesion_desde_cookie():
     if "usuario" in st.session_state:
         return
-    if st.session_state.pop("_acabamos_de_cerrar_sesion", False):
-        # Justo después de cerrar sesión, las cookies del navegador pueden
-        # tardar un round-trip en reflejar el borrado (limitación conocida
-        # de los componentes de cookies en Streamlit). Si intentamos
-        # restaurar la sesión en este MISMO rerun, podemos revivir una
-        # sesión que el propio usuario acaba de cerrar — y como el
-        # refresh token ya fue invalidado en el servidor por sign_out(),
-        # esa restauración queda en un estado inconsistente que provoca
-        # errores más adelante (RLS "anon" en llamadas subsecuentes).
-        # Solución: NUNCA restaurar en el rerun inmediatamente posterior
-        # a un logout — para entonces el navegador ya habrá completado el
-        # borrado real de las cookies en cualquier rerun futuro.
+    if st.session_state.get("_acabamos_de_cerrar_sesion"):
+        if _cookies_actuales.get("access_token") or _cookies_actuales.get("refresh_token"):
+            # El navegador TODAVÍA no confirma el borrado de las cookies
+            # (puede tardar varios reruns, ya que el componente de
+            # cookies a veces dispara uno extra al completar su propio
+            # borrado). Mientras tanto, NUNCA intentamos restaurar sesión
+            # — evita revivir una sesión que el usuario acaba de cerrar.
+            return
+        # Ya se confirmó que las cookies quedaron vacías: es seguro
+        # volver a permitir la restauración normal en el futuro.
+        st.session_state.pop("_acabamos_de_cerrar_sesion", None)
         return
     access_token = _cookies_actuales.get("access_token")
     refresh_token = _cookies_actuales.get("refresh_token")
