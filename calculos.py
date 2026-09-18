@@ -143,3 +143,44 @@ def agregar_casos_por_ubicacion(registros: list[dict]) -> list[dict]:
         acumulado[clave]["fallecidos_totales"] += r["fallecidos"]
 
     return list(acumulado.values())
+
+
+def encontrar_pico(serie: list[dict]) -> dict | None:
+    """Día con el máximo de casos activos — para anotarlo en el gráfico."""
+    validos = [r for r in serie if r.get("casos_activos") is not None]
+    if not validos:
+        return None
+    return max(validos, key=lambda r: r["casos_activos"])
+
+
+def calcular_fase_por_dia(serie: list[dict], ventana: int = 4) -> list[str | None]:
+    """
+    Calcula la tasa de crecimiento con una ventana móvil corta (por
+    defecto 4 días) para CADA día de la serie, y clasifica su fase.
+    Se usa para dibujar líneas de cambio de fase sobre el gráfico
+    (dónde el brote pasó de aceleración a meseta, etc.) — es una
+    heurística de suavizado local, no un recálculo de todo el histórico.
+    """
+    # Import local para evitar dependencia circular con clasificacion.py
+    import clasificacion
+
+    fases = []
+    for i in range(len(serie)):
+        sub = serie[max(0, i - ventana + 1): i + 1]
+        vel = tasa_crecimiento_y_duplicacion(sub)
+        fase = clasificacion.clasificar_fase_heuristica(vel["tasa_r"])
+        fases.append(fase["fase"])
+    return fases
+
+
+def detectar_cambios_de_fase(serie: list[dict], ventana: int = 4) -> list[dict]:
+    """Devuelve solo los días donde la fase CAMBIÓ respecto al día anterior
+    (para no saturar el gráfico con una línea por cada día)."""
+    fases = calcular_fase_por_dia(serie, ventana=ventana)
+    cambios = []
+    anterior = None
+    for i, fase in enumerate(fases):
+        if fase != anterior and fase != "Sin datos suficientes":
+            cambios.append({"fecha": serie[i]["fecha"], "fase": fase})
+        anterior = fase
+    return cambios

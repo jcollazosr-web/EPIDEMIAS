@@ -221,6 +221,30 @@ def obtener_historial(brote_id: int, limite: int = 50) -> list[dict]:
 
 
 # ---------------------------------------------------------------------
+# Eventos / marcadores de intervenciones (vacunación, cuarentena, etc.)
+# ---------------------------------------------------------------------
+def listar_eventos(brote_id: int) -> list[dict]:
+    client = get_client()
+    res = client.table("eventos_brote").select("*").eq("brote_id", brote_id).order("fecha").execute()
+    return res.data or []
+
+
+def crear_evento(brote_id: int, usuario_id: str, fecha, etiqueta: str) -> dict:
+    client = get_client()
+    res = client.table("eventos_brote").insert({
+        "brote_id": brote_id, "usuario_id": usuario_id,
+        "fecha": fecha.isoformat() if hasattr(fecha, "isoformat") else fecha,
+        "etiqueta": etiqueta.strip(),
+    }).execute()
+    return res.data[0] if res.data else {}
+
+
+def eliminar_evento(evento_id: int) -> None:
+    client = get_client()
+    client.table("eventos_brote").delete().eq("id", evento_id).execute()
+
+
+# ---------------------------------------------------------------------
 # Vías de contagio
 # ---------------------------------------------------------------------
 def listar_vias(usuario_id: str) -> list[dict]:

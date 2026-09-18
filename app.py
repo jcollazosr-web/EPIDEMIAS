@@ -31,6 +31,7 @@ import sugerencia_modelos as sm
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
 URL_BASE_APP = "https://epidemias-jmcr.streamlit.app"
 RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
+RUTA_LOGO_ICONO = os.path.join(os.path.dirname(__file__), "assets", "logo_icono.png")
 RUTA_ICONO_ROBOT = os.path.join(os.path.dirname(__file__), "assets", "robot_pensamiento.png")
 
 # Colores del manual de marca (Fundación Juan Manuel Collazos)
@@ -39,7 +40,7 @@ COLOR_VIOLETA = "#9e33b2"
 COLOR_CIAN = "#00d6ff"
 COLOR_AZUL_COMPLEMENTARIO = "#303896"
 
-st.set_page_config(page_title="EpiScan", page_icon=RUTA_LOGO, layout="wide")
+st.set_page_config(page_title="EpiScan", page_icon=RUTA_LOGO_ICONO, layout="wide")
 
 st.markdown(
     f"""
@@ -67,6 +68,17 @@ st.markdown(
         margin-top: 0.5em;
     }}
     a.boton-donar:hover {{ background-color: {COLOR_VIOLETA}; color: white !important; }}
+
+    /* Chatbot flotante: siempre visible en la esquina inferior derecha,
+       sin importar cuánto se haga scroll. Streamlit asigna la clase
+       .st-key-<key> al contenedor de cualquier elemento con ese `key`. */
+    .st-key-chatbot_flotante {{
+        position: fixed !important;
+        bottom: 24px;
+        right: 24px;
+        z-index: 9999;
+        width: auto !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -118,7 +130,7 @@ _restaurar_sesion_desde_cookie()
 def pantalla_login():
     col_logo, col_titulo = st.columns([1, 3])
     with col_logo:
-        st.image(RUTA_LOGO, width=140)
+        st.image(RUTA_LOGO_ICONO, width=120)
     with col_titulo:
         st.title("EpiScan")
         st.caption("Sistema de vigilancia epidemiológica")
@@ -198,7 +210,7 @@ def pantalla_login():
 def barra_lateral_sesion(usuario: dict):
     col_logo_sb, _ = st.columns([2, 1])
     with col_logo_sb:
-        st.image(RUTA_LOGO, width=130)
+        st.image(RUTA_LOGO_ICONO, width=110)
     st.markdown(f"**Sesión:** {usuario['email']}")
 
     with st.expander("❓ Cómo usar esta app"):
@@ -591,14 +603,59 @@ def seccion_lateral_donacion():
     st.markdown(f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">Donar ahora</a>', unsafe_allow_html=True)
 
 
+def seccion_lateral_eventos(usuario_id: str, brote_id: int):
+    with st.expander("📌 Eventos e intervenciones"):
+        st.caption("Marca fechas clave (inicio de cuarentena, campaña de vacunación, etc.) y se dibujan en los gráficos.")
+        with st.form("form_nuevo_evento"):
+            fecha_evento = st.date_input("Fecha del evento", value=date.today(), format="DD/MM/YYYY")
+            etiqueta_evento = st.text_input("Descripción corta (ej. 'Inicio de cuarentena')")
+            agregar = st.form_submit_button("Agregar evento")
+        if agregar and etiqueta_evento.strip():
+            db.crear_evento(brote_id, usuario_id, fecha_evento, etiqueta_evento)
+            st.success("Evento agregado.")
+            st.rerun()
+
+        eventos = db.listar_eventos(brote_id)
+        if eventos:
+            st.caption("Eventos marcados:")
+            for e in eventos:
+                fecha_legible = pd.to_datetime(e["fecha"]).strftime("%d/%m/%Y")
+                ce1, ce2 = st.columns([4, 1])
+                ce1.caption(f"{fecha_legible} — {e['etiqueta']}")
+                if ce2.button("✕", key=f"del_evento_{e['id']}"):
+                    db.eliminar_evento(e["id"])
+                    st.rerun()
+
+
 # =======================================================================
 # DASHBOARD PRINCIPAL — visualización del brote seleccionado
 # =======================================================================
+def _mostrar_metrica_con_sparkline(columna, titulo: str, valor_texto: str, valores: list, color: str, key: str):
+    """KPI con una mini-gráfica de tendencia debajo — para ver de un
+    vistazo si viene subiendo o bajando, sin abrir el gráfico grande."""
+    columna.metric(titulo, valor_texto)
+    valores_validos = [v for v in valores if v == v]  # descarta NaN
+    if len(valores_validos) >= 2:
+        try:
+            import plotly.graph_objects as go
+
+            fig = go.Figure(go.Scatter(y=valores_validos, mode="lines", line=dict(color=color, width=2)))
+            fig.update_layout(height=45, margin=dict(l=0, r=0, t=0, b=0), xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False)
+            columna.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"spark_{key}")
+        except ImportError:
+            pass
+
+
 def dashboard_kpis(serie: list, velocidad: dict, fase: dict):
     ultimo = serie[-1] if serie else {}
+    ventana = serie[-14:]
+    activos_recientes = [r["casos_activos"] for r in ventana]
+    rt_recientes = [r["rt_efectivo"] for r in ventana]
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Casos activos", ultimo.get("casos_activos", 0))
-    c2.metric("Rt efectivo (último día)", f"{ultimo.get('rt_efectivo', 0):.2f}" if ultimo.get("rt_efectivo") == ultimo.get("rt_efectivo") else "N/D")
+    _mostrar_metrica_con_sparkline(c1, "Casos activos", str(ultimo.get("casos_activos", 0)), activos_recientes, COLOR_AZUL_COMPLEMENTARIO, key="activos")
+    rt_ultimo_txt = f"{ultimo.get('rt_efectivo', 0):.2f}" if ultimo.get("rt_efectivo") == ultimo.get("rt_efectivo") else "N/D"
+    _mostrar_metrica_con_sparkline(c2, "Rt efectivo (último día)", rt_ultimo_txt, rt_recientes, COLOR_VIOLETA, key="rt")
     c3.metric("Tasa de crecimiento (r)", f"{velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "N/D")
     c4.metric("Fase estimada", f"{fase['color']} {fase['fase']}")
 
@@ -644,26 +701,72 @@ def _boton_analisis_descriptivo(titulo_grafico: str, resumen_datos: str, key: st
             st.markdown(resultado["texto"])
 
 
-def dashboard_grafico_principal(serie: list):
+def _agregar_anotaciones(fig, serie: list, eventos: list = None, mostrar_pico: bool = True, mostrar_cambios_fase: bool = True):
+    """Dibuja sobre CUALQUIER gráfico de series de tiempo: el día del pico,
+    los cambios de fase detectados, y los eventos/intervenciones marcados
+    por el usuario — para que el propio gráfico señale lo importante,
+    sin que la persona tenga que leer los KPIs por separado."""
+    if mostrar_pico:
+        pico = calculos.encontrar_pico(serie)
+        if pico:
+            fecha_pico = pd.to_datetime(pico["fecha"])
+            fig.add_vline(x=fecha_pico, line_dash="dot", line_color=COLOR_VIOLETA, opacity=0.6)
+            fig.add_annotation(x=fecha_pico, y=pico["casos_activos"], text="📍 Pico", showarrow=True,
+                                arrowhead=2, ax=0, ay=-30, font=dict(size=10, color=COLOR_VIOLETA))
+
+    if mostrar_cambios_fase:
+        colores_fase = {"Aceleración": "red", "Meseta": "orange", "Desaceleración": "green"}
+        for c in calculos.detectar_cambios_de_fase(serie):
+            color = colores_fase.get(c["fase"], "gray")
+            fig.add_vline(x=pd.to_datetime(c["fecha"]), line_dash="dash", line_color=color, opacity=0.3)
+
+    for e in (eventos or []):
+        fecha_evento = pd.to_datetime(e["fecha"])
+        fig.add_vline(x=fecha_evento, line_dash="solid", line_color=COLOR_AZUL_OSCURO, opacity=0.5)
+        fig.add_annotation(x=fecha_evento, y=1, yref="paper", text=e["etiqueta"], showarrow=False,
+                            textangle=-90, font=dict(size=9, color=COLOR_AZUL_OSCURO), xanchor="left", yanchor="top")
+    return fig
+
+
+def dashboard_grafico_principal(serie: list, por_via: dict = None, eventos: list = None):
     df = pd.DataFrame(serie)
     if df.empty:
         st.info("Sin datos para graficar todavía.")
         return
     df["fecha"] = pd.to_datetime(df["fecha"])
 
-    series_disponibles = {"Casos activos": "casos_activos", "Casos nuevos": "casos_nuevos"}
-    seleccion = _filtro_series("Mostrar en el gráfico:", list(series_disponibles.keys()), key="filtro_grafico_principal")
+    c_filtro, c_toggle = st.columns([3, 2])
+    with c_filtro:
+        series_disponibles = {"Casos activos": "casos_activos", "Casos nuevos": "casos_nuevos"}
+        seleccion = _filtro_series("Mostrar en el gráfico:", list(series_disponibles.keys()), key="filtro_grafico_principal")
+    with c_toggle:
+        comparar_vias = False
+        if por_via and len(por_via) > 2:
+            comparar_vias = st.toggle("Comparar todas las vías aquí", key="toggle_comparar_vias_principal")
 
     try:
         import plotly.graph_objects as go
 
         fig = go.Figure()
-        if "Casos activos" in seleccion:
-            fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Casos activos",
-                                      mode="lines+markers", line=dict(color=COLOR_AZUL_COMPLEMENTARIO, width=3)))
-        if "Casos nuevos" in seleccion:
-            fig.add_trace(go.Bar(x=df["fecha"], y=df["casos_nuevos"], name="Casos nuevos",
-                                  marker_color=COLOR_CIAN, opacity=0.5, yaxis="y2"))
+
+        if comparar_vias:
+            colores_vias = [COLOR_AZUL_OSCURO, COLOR_VIOLETA, COLOR_CIAN, COLOR_AZUL_COMPLEMENTARIO, "green", "orange"]
+            for i, (nombre_via, serie_via) in enumerate(v for v in por_via.items() if v[0] != "TOTAL"):
+                df_via = pd.DataFrame(serie_via)
+                if df_via.empty:
+                    continue
+                df_via["fecha"] = pd.to_datetime(df_via["fecha"])
+                fig.add_trace(go.Scatter(x=df_via["fecha"], y=df_via["casos_activos"], name=nombre_via,
+                                          line=dict(color=colores_vias[i % len(colores_vias)], width=2)))
+        else:
+            if "Casos activos" in seleccion:
+                fig.add_trace(go.Scatter(x=df["fecha"], y=df["casos_activos"], name="Casos activos",
+                                          mode="lines+markers", line=dict(color=COLOR_AZUL_COMPLEMENTARIO, width=3)))
+            if "Casos nuevos" in seleccion:
+                fig.add_trace(go.Bar(x=df["fecha"], y=df["casos_nuevos"], name="Casos nuevos",
+                                      marker_color=COLOR_CIAN, opacity=0.5, yaxis="y2"))
+
+        fig = _agregar_anotaciones(fig, serie, eventos=eventos)
         fig.update_layout(
             height=400,
             yaxis=dict(title="Casos activos"),
@@ -682,7 +785,7 @@ def dashboard_grafico_principal(serie: list):
     _boton_analisis_descriptivo("Casos activos y nuevos", resumen, key="principal")
 
 
-def dashboard_grafico_componentes(serie: list):
+def dashboard_grafico_componentes(serie: list, eventos: list = None):
     """Evolución de activos, y de recuperados/fallecidos tanto por día
     como acumulados — para responder '¿cómo van los recuperados y
     fallecidos?' tanto en el momento como en total."""
@@ -718,6 +821,7 @@ def dashboard_grafico_componentes(serie: list):
                 fig.add_trace(go.Bar(x=df["fecha"], y=df[campo], name=nombre, marker_color=colores[nombre], opacity=0.6))
             else:
                 fig.add_trace(go.Scatter(x=df["fecha"], y=df[campo], name=nombre, line=dict(color=colores[nombre], width=3 if nombre == "Activos" else 2)))
+        fig = _agregar_anotaciones(fig, serie, eventos=eventos, mostrar_pico=False)
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02), barmode="overlay")
         fig = _aplicar_interactividad_tiempo(fig)
@@ -765,6 +869,37 @@ def dashboard_comparacion_vias(por_via: dict):
     mas_rapida = df_comp.iloc[0]
     resumen = f"Vía con mayor velocidad de crecimiento: {mas_rapida['via']} (tasa r = {mas_rapida['tasa_r']:.3f}). Comparación completa: {df_comp.to_dict('records')}"
     _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias")
+
+
+def dashboard_mapa_calor_semanal(serie: list):
+    """Mapa de calor tipo calendario: día de la semana vs. semana del
+    año, con la intensidad de color según casos nuevos — revela patrones
+    (¿suben los fines de semana?) que una línea de tiempo no muestra."""
+    if len(serie) < 8:
+        return
+    df = pd.DataFrame(serie)
+    df["fecha"] = pd.to_datetime(df["fecha"])
+    df["semana"] = df["fecha"].dt.strftime("%Y-S%U")
+    df["dia_semana"] = df["fecha"].dt.dayofweek  # 0=lunes
+
+    dias_nombre = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+    with st.expander("🗓️ Mapa de calor semanal (patrones por día de la semana)"):
+        try:
+            import plotly.graph_objects as go
+
+            pivote = df.pivot_table(index="dia_semana", columns="semana", values="casos_nuevos", aggfunc="sum", fill_value=0)
+            pivote = pivote.reindex(range(7))
+
+            fig = go.Figure(go.Heatmap(
+                z=pivote.values, x=pivote.columns, y=dias_nombre,
+                colorscale=[[0, "#f2f2f2"], [1, COLOR_AZUL_OSCURO]], showscale=True,
+            ))
+            fig.update_layout(height=280, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="Semana", yaxis_title="")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Colores más intensos = más casos nuevos ese día. Útil para detectar si el brote se concentra en días específicos de la semana.")
+        except ImportError:
+            st.info("Instala 'plotly' para ver el mapa de calor.")
 
 
 def dashboard_tabla_y_export(serie: list, nombre_serie: str):
@@ -1105,14 +1240,14 @@ def seccion_subregistro(serie: list, tipo_via_actual: str = None):
 
 
 def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
-    col_icono, col_titulo = st.columns([1, 5])
-    with col_icono:
+    """Botón flotante fijo en la esquina inferior derecha (ver CSS
+    .st-key-chatbot_flotante), visible todo el tiempo sin importar el
+    scroll — se abre como una ventana flotante (popover) al hacer clic."""
+    with st.popover("🤖 Analista IA", key="chatbot_flotante"):
         st.image(RUTA_ICONO_ROBOT, width=90)
-    with col_titulo:
         st.markdown("**¿No entiendes la gráfica?**")
         st.caption("Pídele una explicación en palabras simples a la IA.")
 
-    with st.expander("Abrir analista IA"):
         # Primero busca la clave configurada por el admin (aplica para
         # todos); si no existe, cae a los Secrets de Streamlit (por si
         # se configuró a la manera antigua).
@@ -1130,7 +1265,7 @@ def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, bro
             )
             return
 
-        if st.button("Explícame estos datos en palabras simples"):
+        if st.button("Explícame estos datos en palabras simples", key="btn_chatbot_flotante"):
             ultimo = serie[-1] if serie else {}
             rt_ultimo = ultimo.get("rt_efectivo")
             resumen = {
@@ -1190,6 +1325,7 @@ def app_principal():
         seccion_lateral_captura(usuario["id"], brote)
         seccion_lateral_carga_masiva(usuario["id"], brote)
         seccion_lateral_editar_eliminar(usuario["id"], brote)
+        seccion_lateral_eventos(usuario["id"], brote["id"])
         st.divider()
         seccion_lateral_admin(usuario["id"])
         st.divider()
@@ -1220,12 +1356,19 @@ def app_principal():
 
     velocidad = calculos.tasa_crecimiento_y_duplicacion(serie)
     fase = clasificacion.clasificar_fase_heuristica(velocidad["tasa_r"])
+    eventos = db.listar_eventos(brote["id"])
 
     dashboard_kpis(serie, velocidad, fase)
-    dashboard_grafico_principal(serie)
-    dashboard_grafico_componentes(serie)
+
+    col_grafico, col_mapa = st.columns([3, 2])
+    with col_grafico:
+        dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
+    with col_mapa:
+        dashboard_mapa(usuario["id"], brote["id"])
+
+    dashboard_grafico_componentes(serie, eventos=eventos)
     dashboard_comparacion_vias(por_via)
-    dashboard_mapa(usuario["id"], brote["id"])
+    dashboard_mapa_calor_semanal(serie)
     dashboard_tabla_y_export(serie, vista_sel)
     seccion_proyeccion(serie, vista_sel, brote["nombre"])
     seccion_comparar_brotes(usuario["id"], brote["id"])

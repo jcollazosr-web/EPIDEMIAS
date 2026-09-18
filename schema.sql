@@ -551,3 +551,26 @@ grant execute on function guardar_configuracion_admin(text, text) to authenticat
 -- =========================================================================
 alter table vias_contagio add column if not exists tipo text
     check (tipo in ('respiratoria', 'contacto_directo', 'zoonotica', 'vectorial', 'hidrica_alimentaria', 'sexual', 'otra'));
+
+-- =========================================================================
+-- MIGRACIÓN: Eventos / marcadores de intervenciones
+-- =========================================================================
+create table if not exists eventos_brote (
+    id           bigint generated always as identity primary key,
+    brote_id     bigint references brotes(id) on delete cascade not null,
+    usuario_id   uuid references auth.users(id) on delete cascade not null,
+    fecha        date not null,
+    etiqueta     text not null,
+    creado_en    timestamptz default now()
+);
+alter table eventos_brote enable row level security;
+create policy "eventos_select_acceso_brote" on eventos_brote for select
+    using (exists (select 1 from brotes b where b.id = eventos_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create policy "eventos_insert_acceso_brote" on eventos_brote for insert
+    with check (exists (select 1 from brotes b where b.id = eventos_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create policy "eventos_delete_acceso_brote" on eventos_brote for delete
+    using (exists (select 1 from brotes b where b.id = eventos_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create index if not exists idx_eventos_brote on eventos_brote (brote_id);

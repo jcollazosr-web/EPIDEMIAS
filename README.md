@@ -199,6 +199,22 @@ o ubicación) sigue restringida al dueño del catálogo.
 - **Botón "📊 Análisis descriptivo"** bajo los 3 gráficos principales,
   conectado a la IA (misma clave que gestiona el admin).
 
+### Lote: anotaciones, sparklines, eventos, mapa de calor
+- **Anotaciones automáticas**: línea + etiqueta en el día del pico de
+  casos activos, y líneas de cambio de fase (aceleración/meseta/
+  desaceleración) directamente sobre el gráfico principal.
+- **Sparklines** en los KPIs de Casos activos y Rt (mini-tendencia de
+  los últimos 14 días debajo del número).
+- **Comparar todas las vías EN el gráfico principal**: interruptor
+  "Comparar todas las vías aquí" superpone las líneas de cada vía.
+- **Eventos/intervenciones**: nueva sección en la barra lateral para
+  marcar fechas clave (vacunación, cuarentena, etc.), que se dibujan
+  como líneas verticales con etiqueta en los gráficos.
+- **Mapa de calor semanal**: día de la semana vs. semana del año, para
+  detectar patrones (¿suben los casos los fines de semana?).
+- **Layout en columnas**: el gráfico principal y el mapa de casos ahora
+  van lado a lado en pantallas anchas, en vez de apilados.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
