@@ -75,10 +75,15 @@ st.markdown(
        .st-key-<key> al contenedor de cualquier elemento con ese `key`. */
     .st-key-chatbot_flotante {{
         position: fixed !important;
-        bottom: 24px;
-        right: 24px;
+        left: 21rem; /* justo al borde izquierdo del contenido principal, después de la barra lateral */
+        top: 50%;
+        transform: translateY(-50%);
         z-index: 9999;
         width: auto !important;
+    }}
+    .st-key-chatbot_flotante button {{
+        border-radius: 0 8px 8px 0 !important;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.25);
     }}
     </style>
     """,
@@ -717,9 +722,15 @@ def _agregar_anotaciones(fig, serie: list, eventos: list = None, mostrar_pico: b
 
     if mostrar_cambios_fase:
         colores_fase = {"Aceleración": "red", "Meseta": "orange", "Desaceleración": "green"}
+        semaforo_fase = {"Aceleración": "🔴", "Meseta": "🟠", "Desaceleración": "🟢"}
         for c in calculos.detectar_cambios_de_fase(serie):
             color = colores_fase.get(c["fase"], "gray")
-            fig.add_vline(x=pd.to_datetime(c["fecha"]), line_dash="dash", line_color=color, opacity=0.3)
+            emoji = semaforo_fase.get(c["fase"], "⚪")
+            fig.add_vline(
+                x=pd.to_datetime(c["fecha"]), line_dash="dash", line_color=color, opacity=0.4,
+                annotation_text=f"{emoji} {c['fase']}", annotation_position="top",
+                annotation_font=dict(size=9, color=color),
+            )
 
     for e in (eventos or []):
         fecha_evento = pd.to_datetime(e["fecha"])
@@ -1361,11 +1372,8 @@ def app_principal():
 
     dashboard_kpis(serie, velocidad, fase)
 
-    col_grafico, col_mapa = st.columns([3, 2])
-    with col_grafico:
-        dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
-    with col_mapa:
-        dashboard_mapa(usuario["id"], brote["id"])
+    dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
+    dashboard_mapa(usuario["id"], brote["id"])
 
     dashboard_grafico_componentes(serie, eventos=eventos)
     dashboard_comparacion_vias(por_via)
