@@ -112,6 +112,23 @@ def es_admin(usuario_id: str) -> bool:
     return perfil.get("rol") == "admin"
 
 
+def tiene_ia_habilitada(usuario_id: str) -> bool:
+    """El admin siempre tiene acceso (para poder probar/gestionar);
+    cualquier otro usuario necesita plan 'pro'. Sin usuario (ej. el
+    dashboard público, sin sesión iniciada), nunca hay acceso."""
+    if not usuario_id:
+        return False
+    perfil = obtener_perfil(usuario_id)
+    return perfil.get("rol") == "admin" or perfil.get("plan") == "pro"
+
+
+def actualizar_plan_usuario_admin(usuario_id: str, plan: str) -> None:
+    """Solo funciona si quien llama tiene rol admin — lo valida la
+    función de Postgres, no este código."""
+    client = get_client()
+    client.rpc("admin_actualizar_plan_usuario", {"p_usuario_id": usuario_id, "p_plan": plan}).execute()
+
+
 def recuperar_password(email: str):
     client = get_client()
     return client.auth.reset_password_for_email(email)
@@ -527,17 +544,29 @@ def obtener_o_crear_ubicacion(
     la geocodifica y la crea. Evita geocodificar de nuevo algo ya guardado.
     Si se pasan lat_gps/lon_gps (coordenadas reales del GPS del
     dispositivo), se usan tal cual en vez de geocodificar por nombre —
-    son más precisas que adivinar la ubicación a partir del texto."""
+    son más precisas que adivinar la ubicación a partir del texto.
+
+    La búsqueda de una ubicación ya existente es insensible a mayúsculas
+    (ej. "cali" encuentra "Cali") para no crear duplicados por
+    capitalización — pero el texto se GUARDA tal cual lo entrega el
+    llamador (los menús desplegables ya traen la forma correcta en
+    español, como "Valle del Cauca"; forzar un .title() aquí la habría
+    dañado a "Valle Del Cauca")."""
+    pais = (pais or "").strip()
+    departamento = (departamento or "").strip()
+    ciudad = (ciudad or "").strip()
+    barrio = (barrio or "").strip()
+
     client = get_client()
 
     consulta = (
         client.table("ubicaciones")
         .select("*")
         .eq("usuario_id", usuario_id)
-        .eq("pais", pais)
-        .eq("departamento", departamento or "")
-        .eq("ciudad", ciudad or "")
-        .eq("barrio", barrio or "")
+        .ilike("pais", pais)
+        .ilike("departamento", departamento or "")
+        .ilike("ciudad", ciudad or "")
+        .ilike("barrio", barrio or "")
         .execute()
     )
     if consulta.data:

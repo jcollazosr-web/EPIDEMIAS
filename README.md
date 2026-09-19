@@ -265,6 +265,16 @@ o ubicación) sigue restringida al dueño del catálogo.
   guardar credenciales y trae riesgos de seguridad (inyección SQL) que
   van más allá de una integración de solo lectura a datos públicos.
 
+- **Soporte multi-proveedor de IA**: además de Anthropic (Claude), ahora
+  se puede configurar OpenAI (GPT), Google (Gemini) o DeepSeek — el
+  admin elige el proveedor activo y pega su clave, todo desde el menú
+  🔑 Administrador (`interpretacion.py` generalizado).
+- **Plan por usuario (Gratis/Pro)**: el administrador activa o desactiva
+  las funciones de IA por cuenta individual desde el listado de
+  usuarios. El admin siempre tiene acceso (para poder probar/gestionar).
+  Quien no tiene plan PRO ve el aviso "🔒 Funciones de Inteligencia
+  Artificial disponibles en la versión PRO" en vez del botón de IA.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

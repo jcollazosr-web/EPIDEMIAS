@@ -599,3 +599,61 @@ create policy "fuentes_externas_delete_acceso_brote" on fuentes_externas_brote f
     using (exists (select 1 from brotes b where b.id = fuentes_externas_brote.brote_id
         and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
 create index if not exists idx_fuentes_externas_brote on fuentes_externas_brote (brote_id);
+
+-- =========================================================================
+-- MIGRACIÓN: Endurecimiento de seguridad (hallazgos del linter de Supabase)
+-- =========================================================================
+alter function set_actualizado_en() set search_path = public;
+alter function evitar_autoasignacion_de_rol() set search_path = public;
+alter function crear_perfil_para_nuevo_usuario() set search_path = public;
+alter function registrar_historial_registro() set search_path = public;
+alter function quitar_colaborador(bigint, uuid) set search_path = public;
+alter function generar_token_publico(bigint) set search_path = public;
+alter function revocar_token_publico(bigint) set search_path = public;
+
+-- Funciones de TRIGGER: nunca deben poder llamarse directamente vía RPC.
+revoke execute on function crear_perfil_para_nuevo_usuario() from public;
+revoke execute on function evitar_autoasignacion_de_rol() from public;
+revoke execute on function registrar_historial_registro() from public;
+
+-- anon no necesita leer ninguna tabla directamente — solo a través de
+-- obtener_brote_publico(), que valida el token internamente.
+revoke select on brotes, colaboradores_brote, configuracion_global, eventos_brote,
+    fuentes_externas_brote, historial_cambios, perfiles, registros_diarios,
+    ubicaciones, vias_contagio from anon;
+
+-- =========================================================================
+-- MIGRACIÓN: Plan de usuario (gratis/pro) para funciones de IA
+-- =========================================================================
+alter table perfiles add column if not exists plan text not null default 'gratis' check (plan in ('gratis', 'pro'));
+
+create or replace function admin_actualizar_plan_usuario(p_usuario_id uuid, p_plan text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+    if not exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    if p_plan not in ('gratis', 'pro') then
+        raise exception 'Plan inválido: use gratis o pro';
+    end if;
+    update perfiles set plan = p_plan where usuario_id = p_usuario_id;
+end;
+$$;
+grant execute on function admin_actualizar_plan_usuario(uuid, text) to authenticated;
+
+drop function if exists admin_listar_usuarios();
+create or replace function admin_listar_usuarios()
+returns table(usuario_id uuid, email text, creado_en timestamptz, confirmado boolean, plan text)
+language plpgsql security definer set search_path = public, auth as $$
+begin
+    if not exists (select 1 from perfiles p where p.usuario_id = auth.uid() and p.rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    return query
+    select u.id, u.email::text, u.created_at, (u.email_confirmed_at is not null), coalesce(pf.plan, 'gratis')
+    from auth.users u
+    left join perfiles pf on pf.usuario_id = u.id
+    order by u.created_at;
+end;
+$$;
+grant execute on function admin_listar_usuarios() to authenticated;

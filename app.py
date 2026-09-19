@@ -450,28 +450,36 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
             guardar = st.form_submit_button("Guardar registro")
 
         if guardar:
-            via_id = nombres_vias.get(via_sel_nombre)
-            ubicacion_id = None
-            if pais.strip():
-                ubicacion = db.obtener_o_crear_ubicacion(
-                    catalogo_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip(),
-                    lat_gps=lat_gps_valor, lon_gps=lon_gps_valor,
-                )
-                ubicacion_id = ubicacion.get("id")
-                if ubicacion and ubicacion.get("latitud") is None:
-                    st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
+            try:
+                via_id = nombres_vias.get(via_sel_nombre)
+                ubicacion_id = None
+                pais_limpio = str(pais or "").strip()
+                if pais_limpio:
+                    ubicacion = db.obtener_o_crear_ubicacion(
+                        catalogo_id, pais_limpio, str(departamento or "").strip(),
+                        str(ciudad or "").strip(), str(barrio or "").strip(),
+                        lat_gps=lat_gps_valor, lon_gps=lon_gps_valor,
+                    )
+                    ubicacion_id = ubicacion.get("id")
+                    if ubicacion and ubicacion.get("latitud") is None:
+                        st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
 
-            db.upsert_registro(
-                usuario_id=usuario_id, brote_id=brote_id, fecha=fecha_sel, via_contagio_id=via_id,
-                ubicacion_id=ubicacion_id, casos_nuevos=int(casos_nuevos), fallecidos=int(fallecidos),
-                recuperados=int(recuperados),
-            )
-            st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
-            if gps_lat and gps_lon:
-                st.query_params.clear()
-                st.session_state.pop("_gps_ultima_coord", None)
+                db.upsert_registro(
+                    usuario_id=usuario_id, brote_id=brote_id, fecha=fecha_sel, via_contagio_id=via_id,
+                    ubicacion_id=ubicacion_id, casos_nuevos=int(casos_nuevos), fallecidos=int(fallecidos),
+                    recuperados=int(recuperados),
+                )
+                st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
+                if gps_lat and gps_lon:
+                    st.query_params.clear()
+                    st.session_state.pop("_gps_ultima_coord", None)
                 st.session_state.pop("_gps_resultado", None)
-            st.rerun()
+                st.rerun()
+            except Exception as e:
+                import traceback
+                st.error(f"❌ No se pudo guardar el registro — {type(e).__name__}: {e}")
+                with st.expander("Detalle técnico completo (para reportar el error)"):
+                    st.code(traceback.format_exc())
 
 
 def seccion_lateral_carga_masiva(usuario_id: str, brote: dict):
@@ -621,20 +629,35 @@ def seccion_lateral_admin(usuario_id: str):
     if not db.es_admin(usuario_id):
         return
     with st.expander("🔑 Administrador"):
-        with st.form("form_config_anthropic"):
-            st.caption("Clave de Anthropic para el chatbot de interpretación (🤖 en el dashboard) — aplica para TODOS los usuarios de la app, no solo para ti.")
-            clave_actual = db.obtener_configuracion("ANTHROPIC_API_KEY")
+        st.markdown("**Proveedor de IA (funciones PRO)**")
+        st.caption("Elige qué proveedor de IA usa la app y pega su clave. Aplica para TODOS los usuarios con acceso PRO.")
+
+        proveedor_actual = db.obtener_configuracion("PROVEEDOR_IA_ACTIVO") or "anthropic"
+        opciones_proveedor = list(interpretacion.PROVEEDORES.keys())
+        proveedor_sel = st.selectbox(
+            "Proveedor activo", options=opciones_proveedor,
+            index=opciones_proveedor.index(proveedor_actual) if proveedor_actual in opciones_proveedor else 0,
+            format_func=lambda p: interpretacion.PROVEEDORES[p]["etiqueta"],
+            key="proveedor_ia_sel",
+        )
+
+        with st.form("form_config_ia"):
+            clave_actual = db.obtener_configuracion(f"{proveedor_sel.upper()}_API_KEY")
             nueva_clave = st.text_input(
-                "ANTHROPIC_API_KEY", type="password",
-                placeholder="sk-ant-..." if not clave_actual else "•••••••••••••• (ya configurada, pega una nueva para reemplazarla)",
+                f"Clave de {interpretacion.PROVEEDORES[proveedor_sel]['etiqueta']}", type="password",
+                placeholder="Ya configurada — pega una nueva para reemplazarla" if clave_actual else "Pega la clave aquí",
             )
-            guardar_clave = st.form_submit_button("Guardar clave")
-        if guardar_clave and nueva_clave.strip():
+            guardar_clave = st.form_submit_button("Guardar proveedor y clave")
+        if guardar_clave:
             try:
-                db.guardar_configuracion_admin("ANTHROPIC_API_KEY", nueva_clave.strip())
-                st.success("Clave guardada — ya aplica para todos los usuarios.")
+                db.guardar_configuracion_admin("PROVEEDOR_IA_ACTIVO", proveedor_sel)
+                if nueva_clave.strip():
+                    db.guardar_configuracion_admin(f"{proveedor_sel.upper()}_API_KEY", nueva_clave.strip())
+                st.success(f"Proveedor activo: {interpretacion.PROVEEDORES[proveedor_sel]['etiqueta']}.")
             except Exception as e:
                 st.error(f"No se pudo guardar: {e}")
+
+        st.divider()
 
         try:
             stats = db.estadisticas_globales_admin()
@@ -657,10 +680,23 @@ def seccion_lateral_admin(usuario_id: str):
             return
 
         for u in usuarios:
-            cu1, cu2 = st.columns([4, 1])
+            cu1, cu2, cu3 = st.columns([3, 1.3, 1])
             cu1.caption(f"{u['email']} — {'✅ confirmado' if u['confirmado'] else '⏳ sin confirmar'}")
+
+            plan_actual = u.get("plan", "gratis")
+            nuevo_plan = cu2.selectbox(
+                "Plan", options=["gratis", "pro"], index=["gratis", "pro"].index(plan_actual),
+                key=f"plan_sel_{u['usuario_id']}", label_visibility="collapsed",
+            )
+            if nuevo_plan != plan_actual:
+                try:
+                    db.actualizar_plan_usuario_admin(u["usuario_id"], nuevo_plan)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo actualizar el plan: {e}")
+
             if u["usuario_id"] != usuario_id:  # no permitir auto-eliminarse desde aquí
-                if cu2.button("🗑️", key=f"del_usuario_{u['usuario_id']}"):
+                if cu3.button("🗑️", key=f"del_usuario_{u['usuario_id']}"):
                     st.session_state[f"confirmar_del_{u['usuario_id']}"] = True
 
             if st.session_state.get(f"confirmar_del_{u['usuario_id']}"):
@@ -765,18 +801,42 @@ def _filtro_series(etiqueta: str, opciones: list, key: str) -> list:
         return [op for op, col in zip(opciones, columnas) if col.checkbox(op, value=True, key=f"{key}_{op}")]
 
 
-def _boton_analisis_descriptivo(titulo_grafico: str, resumen_datos: str, key: str):
+def _obtener_proveedor_y_clave_ia() -> tuple:
+    """Lee el proveedor de IA activo y su clave, configurados por el
+    admin. Si no hay proveedor guardado, usa Anthropic por defecto
+    (compatibilidad con instalaciones previas a esta función)."""
+    try:
+        proveedor = db.obtener_configuracion("PROVEEDOR_IA_ACTIVO") or "anthropic"
+        api_key = db.obtener_configuracion(f"{proveedor.upper()}_API_KEY")
+    except Exception:
+        proveedor, api_key = "anthropic", None
+    if not api_key:
+        # Compatibilidad con instalaciones que solo tenían la clave en
+        # los Secrets de Streamlit, a la manera antigua.
+        api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+    return proveedor, api_key
+
+
+def _mostrar_aviso_ia_pro():
+    st.info(
+        "🔒 **Funciones de Inteligencia Artificial disponibles en la versión PRO.** "
+        "Contacta al administrador de tu cuenta para activarlas."
+    )
+
+
+def _boton_analisis_descriptivo(titulo_grafico: str, resumen_datos: str, key: str, usuario_id: str = None):
     """Botón reutilizable bajo cualquier gráfico: genera un análisis
-    descriptivo en palabras simples usando la clave de IA del admin."""
+    descriptivo en palabras simples usando la clave de IA del admin.
+    Función PRO — requiere que el usuario tenga el plan habilitado."""
+    if not db.tiene_ia_habilitada(usuario_id):
+        with st.expander("📊 Análisis descriptivo 🔒 PRO"):
+            _mostrar_aviso_ia_pro()
+        return
+
     if st.button("📊 Análisis descriptivo", key=f"analisis_{key}"):
-        try:
-            api_key = db.obtener_configuracion("ANTHROPIC_API_KEY")
-        except Exception:
-            api_key = None
-        if not api_key:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+        proveedor, api_key = _obtener_proveedor_y_clave_ia()
         with st.spinner("Analizando..."):
-            resultado = interpretacion.generar_analisis_descriptivo(titulo_grafico, resumen_datos, api_key)
+            resultado = interpretacion.generar_analisis_descriptivo(titulo_grafico, resumen_datos, api_key, proveedor)
         if not resultado["valido"]:
             st.info(resultado["mensaje"])
         else:
@@ -822,7 +882,7 @@ def _agregar_anotaciones(fig, serie: list, eventos: list = None, mostrar_pico: b
     return fig
 
 
-def dashboard_grafico_principal(serie: list, por_via: dict = None, eventos: list = None):
+def dashboard_grafico_principal(serie: list, usuario_id: str = None, por_via: dict = None, eventos: list = None):
     df = pd.DataFrame(serie)
     if df.empty:
         st.info("Sin datos para graficar todavía.")
@@ -876,10 +936,10 @@ def dashboard_grafico_principal(serie: list, por_via: dict = None, eventos: list
 
     ultimo = df.iloc[-1]
     resumen = f"Casos activos actuales: {ultimo['casos_activos']}. Casos nuevos del último día: {ultimo['casos_nuevos']}. Total de días con datos: {len(df)}."
-    _boton_analisis_descriptivo("Casos activos y nuevos", resumen, key="principal")
+    _boton_analisis_descriptivo("Casos activos y nuevos", resumen, key="principal", usuario_id=usuario_id)
 
 
-def dashboard_grafico_componentes(serie: list, eventos: list = None):
+def dashboard_grafico_componentes(serie: list, usuario_id: str = None, eventos: list = None):
     """Evolución de activos, y de recuperados/fallecidos tanto por día
     como acumulados — para responder '¿cómo van los recuperados y
     fallecidos?' tanto en el momento como en total."""
@@ -929,10 +989,10 @@ def dashboard_grafico_componentes(serie: list, eventos: list = None):
         f"Fallecidos acumulados: {ultimo['fallecidos_acumulados']}. Recuperados del último día: {ultimo['recuperados']}. "
         f"Fallecidos del último día: {ultimo['fallecidos']}."
     )
-    _boton_analisis_descriptivo("Activos, recuperados y fallecidos", resumen, key="componentes")
+    _boton_analisis_descriptivo("Activos, recuperados y fallecidos", resumen, key="componentes", usuario_id=usuario_id)
 
 
-def dashboard_comparacion_vias(por_via: dict):
+def dashboard_comparacion_vias(por_via: dict, usuario_id: str):
     if len(por_via) <= 2:
         return
     st.markdown("#### Velocidad de transmisión por vía")
@@ -962,7 +1022,7 @@ def dashboard_comparacion_vias(por_via: dict):
 
     mas_rapida = df_comp.iloc[0]
     resumen = f"Vía con mayor velocidad de crecimiento: {mas_rapida['via']} (tasa r = {mas_rapida['tasa_r']:.3f}). Comparación completa: {df_comp.to_dict('records')}"
-    _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias")
+    _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias", usuario_id=usuario_id)
 
 
 def seccion_clusters(usuario_id: str, brote_id: int):
@@ -979,52 +1039,52 @@ def seccion_clusters(usuario_id: str, brote_id: int):
     ubicaciones = list(ubicaciones_map.values())
 
     if len(ubicaciones) < 2:
-        return  # No hay suficientes ubicaciones distintas para agrupar
+        st.caption("Se necesitan al menos 2 ubicaciones distintas con coordenadas para detectar clusters.")
+        return
 
-    with st.expander("🧭 Clusters geográficos automáticos"):
-        st.caption(
-            "Agrupa las ubicaciones cercanas entre sí (por distancia en línea recta) y calcula "
-            "velocidad de transmisión y casos totales de forma independiente para cada foco."
-        )
-        radio = st.slider("Radio de agrupación (km)", min_value=1, max_value=150, value=15, key="radio_cluster")
-        grupos = clusters.detectar_clusters(ubicaciones, radio_km=radio)
+    st.caption(
+        "Agrupa las ubicaciones cercanas entre sí (por distancia en línea recta) y calcula "
+        "velocidad de transmisión y casos totales de forma independiente para cada foco."
+    )
+    radio = st.slider("Radio de agrupación (km)", min_value=1, max_value=150, value=15, key="radio_cluster")
+    grupos = clusters.detectar_clusters(ubicaciones, radio_km=radio)
 
-        if len(grupos) <= 1:
-            st.caption("Con este radio, todas las ubicaciones caen en un solo cluster — prueba un radio más pequeño para separar focos distintos.")
+    if len(grupos) <= 1:
+        st.caption("Con este radio, todas las ubicaciones caen en un solo cluster — prueba un radio más pequeño para separar focos distintos.")
 
-        filas_resumen = []
-        for i, g in enumerate(grupos):
-            ids_g = {u["id"] for u in g}
-            regs_g = [r for r in registros if r.get("ubicacion_id") in ids_g]
-            serie_g = calculos.recalcular_serie(regs_g)
-            vel_g = calculos.tasa_crecimiento_y_duplicacion(serie_g)
-            filas_resumen.append({
-                "Cluster": f"Cluster {i + 1}",
-                "Ubicaciones": clusters.etiquetar_cluster(g),
-                "Casos totales": sum(r["casos_nuevos"] for r in regs_g),
-                "Tasa de crecimiento (r)": round(vel_g["tasa_r"], 3) if vel_g["tasa_r"] is not None else None,
-                "Días para duplicar": round(vel_g["dias_duplicacion"], 1) if vel_g["dias_duplicacion"] is not None else None,
-            })
+    filas_resumen = []
+    for i, g in enumerate(grupos):
+        ids_g = {u["id"] for u in g}
+        regs_g = [r for r in registros if r.get("ubicacion_id") in ids_g]
+        serie_g = calculos.recalcular_serie(regs_g)
+        vel_g = calculos.tasa_crecimiento_y_duplicacion(serie_g)
+        filas_resumen.append({
+            "Cluster": f"Cluster {i + 1}",
+            "Ubicaciones": clusters.etiquetar_cluster(g),
+            "Casos totales": sum(r["casos_nuevos"] for r in regs_g),
+            "Tasa de crecimiento (r)": round(vel_g["tasa_r"], 3) if vel_g["tasa_r"] is not None else None,
+            "Días para duplicar": round(vel_g["dias_duplicacion"], 1) if vel_g["dias_duplicacion"] is not None else None,
+        })
 
-        st.dataframe(pd.DataFrame(filas_resumen), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(filas_resumen), use_container_width=True, hide_index=True)
 
-        etiquetas_grupos = [f["Cluster"] for f in filas_resumen]
-        cluster_sel = st.selectbox("Ver el detalle de un cluster:", options=etiquetas_grupos, key="cluster_seleccionado")
-        idx = etiquetas_grupos.index(cluster_sel)
-        fila_sel = filas_resumen[idx]
+    etiquetas_grupos = [f["Cluster"] for f in filas_resumen]
+    cluster_sel = st.selectbox("Ver el detalle de un cluster:", options=etiquetas_grupos, key="cluster_seleccionado")
+    idx = etiquetas_grupos.index(cluster_sel)
+    fila_sel = filas_resumen[idx]
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Casos totales", fila_sel["Casos totales"])
-        c2.metric("Tasa de crecimiento (r)", fila_sel["Tasa de crecimiento (r)"] if fila_sel["Tasa de crecimiento (r)"] is not None else "N/D")
-        c3.metric("Días para duplicar", fila_sel["Días para duplicar"] if fila_sel["Días para duplicar"] is not None else "N/D")
-        st.caption(f"Ubicaciones en este cluster: {fila_sel['Ubicaciones']}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Casos totales", fila_sel["Casos totales"])
+    c2.metric("Tasa de crecimiento (r)", fila_sel["Tasa de crecimiento (r)"] if fila_sel["Tasa de crecimiento (r)"] is not None else "N/D")
+    c3.metric("Días para duplicar", fila_sel["Días para duplicar"] if fila_sel["Días para duplicar"] is not None else "N/D")
+    st.caption(f"Ubicaciones en este cluster: {fila_sel['Ubicaciones']}")
 
-        resumen_ia = "; ".join(
-            f"{f['Cluster']} ({f['Ubicaciones']}): {f['Casos totales']} casos totales, "
-            f"tasa de crecimiento r={f['Tasa de crecimiento (r)']}"
-            for f in filas_resumen
-        )
-        _boton_analisis_descriptivo("Clusters geográficos del brote", resumen_ia, key="clusters")
+    resumen_ia = "; ".join(
+        f"{f['Cluster']} ({f['Ubicaciones']}): {f['Casos totales']} casos totales, "
+        f"tasa de crecimiento r={f['Tasa de crecimiento (r)']}"
+        for f in filas_resumen
+    )
+    _boton_analisis_descriptivo("Clusters geográficos del brote", resumen_ia, key="clusters", usuario_id=usuario_id)
 
 
 def dashboard_mapa_calor_semanal(serie: list):
@@ -1405,24 +1465,21 @@ def seccion_subregistro(serie: list, tipo_via_actual: str = None):
                 cc3.metric("Tasa de detección estimada", f"{tasa*100:.1f}%" if tasa is not None else "N/D")
 
 
-def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
+def seccion_chatbot_interpretacion(usuario_id: str, serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
     """Botón flotante fijo en la esquina inferior derecha (ver CSS
     .st-key-chatbot_flotante), visible todo el tiempo sin importar el
-    scroll — se abre como una ventana flotante (popover) al hacer clic."""
+    scroll — se abre como una ventana flotante (popover) al hacer clic.
+    Función PRO — requiere que el usuario tenga el plan habilitado."""
     with st.popover("🤖 Analista IA", key="chatbot_flotante"):
         st.image(RUTA_ICONO_ROBOT, width=90)
         st.markdown("**¿No entiendes la gráfica?**")
         st.caption("Pídele una explicación en palabras simples a la IA.")
 
-        # Primero busca la clave configurada por el admin (aplica para
-        # todos); si no existe, cae a los Secrets de Streamlit (por si
-        # se configuró a la manera antigua).
-        try:
-            api_key = db.obtener_configuracion("ANTHROPIC_API_KEY")
-        except Exception:
-            api_key = None
-        if not api_key:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
+        if not db.tiene_ia_habilitada(usuario_id):
+            _mostrar_aviso_ia_pro()
+            return
+
+        proveedor, api_key = _obtener_proveedor_y_clave_ia()
 
         if not api_key:
             st.caption(
@@ -1444,7 +1501,7 @@ def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, bro
                 "rt_ultimo": f"{rt_ultimo:.2f}" if rt_ultimo == rt_ultimo else "N/D",
             }
             with st.spinner("Pensando..."):
-                resultado = interpretacion.generar_interpretacion(resumen, api_key)
+                resultado = interpretacion.generar_interpretacion(resumen, api_key, proveedor)
             if not resultado["valido"]:
                 st.warning(resultado["mensaje"])
             else:
@@ -1532,6 +1589,82 @@ def seccion_fuentes_externas(usuario_id: str, brote_id: int, serie: list):
 # =======================================================================
 # Enrutamiento principal
 # =======================================================================
+def seccion_analisis_ia_brote(usuario_id: str, brote: dict, serie: list, velocidad: dict, fase: dict,
+                               por_via: dict, vista_sel: str, tipo_via_actual: str):
+    st.image(RUTA_ICONO_ROBOT, width=110)
+    st.markdown("### Análisis integral del brote con Inteligencia Artificial")
+    st.caption(
+        "A diferencia de los botones de \"Análisis descriptivo\" bajo cada gráfico (que explican "
+        "una sola vista), esto arma un reporte completo combinando KPIs, comparación de vías, "
+        "clusters geográficos y proyección — todo en un solo análisis."
+    )
+
+    if not db.tiene_ia_habilitada(usuario_id):
+        _mostrar_aviso_ia_pro()
+        return
+
+    proveedor, api_key = _obtener_proveedor_y_clave_ia()
+
+    if not api_key:
+        st.info(
+            "Esta función todavía no está activada. El administrador de la app puede configurarla "
+            "en el menú 🔑 Administrador de la barra lateral."
+        )
+        return
+
+    if not st.button("🧠 Generar análisis completo del brote", key="btn_analisis_completo"):
+        return
+
+    # --- Construir el resumen de texto con todo lo ya calculado --------
+    ultimo = serie[-1] if serie else {}
+    partes = [
+        f"Brote: {brote['nombre']}. Serie mostrada: {vista_sel}.",
+        f"Casos activos actuales: {ultimo.get('casos_activos', 'N/D')}.",
+        f"Tasa de crecimiento (r): {velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "Tasa de crecimiento: N/D",
+        f"Fase estimada: {fase['fase']}.",
+    ]
+
+    if len(por_via) > 2:
+        comparacion = calculos.comparar_velocidad_por_via(por_via)
+        texto_vias = "; ".join(f"{c['via']}: {c['casos_activos_actuales']} casos activos, r={c['tasa_r']}" for c in comparacion)
+        partes.append(f"Comparación entre vías: {texto_vias}.")
+
+    registros_brote = db.obtener_registros(usuario_id, brote_id=brote["id"])
+    ubicaciones_map = {}
+    for r in registros_brote:
+        uid = r.get("ubicacion_id")
+        ubic = r.get("ubicaciones")
+        if uid and ubic and ubic.get("latitud") is not None and uid not in ubicaciones_map:
+            etiqueta = ubic.get("ciudad") or ubic.get("departamento") or ubic.get("pais") or "Sin nombre"
+            ubicaciones_map[uid] = {"id": uid, "etiqueta": etiqueta, "latitud": ubic["latitud"], "longitud": ubic["longitud"]}
+    if len(ubicaciones_map) >= 2:
+        grupos = clusters.detectar_clusters(list(ubicaciones_map.values()), radio_km=15)
+        texto_clusters = "; ".join(f"{clusters.etiquetar_cluster(g)} ({len(g)} ubicaciones)" for g in grupos)
+        partes.append(f"Clusters geográficos detectados: {texto_clusters}.")
+
+    if tipo_via_actual:
+        perfil = clasificacion.obtener_perfil_r0(tipo_via_actual)
+        partes.append(f"Vía de contagio: {perfil['etiqueta']} (R0 típico {perfil['r0_sugerido']}, rango {perfil['rango']}).")
+
+    resultado_proy = proyecciones.proyectar_regresion_log_lineal(serie, dias_futuros=7)
+    if resultado_proy["valido"]:
+        partes.append(
+            f"Proyección a 7 días (regresión log-lineal): tasa de crecimiento diaria estimada "
+            f"{resultado_proy['tasa_crecimiento_diaria']:.3f}."
+        )
+
+    datos_texto = "\n".join(partes)
+
+    with st.spinner("Analizando el brote completo..."):
+        resultado = interpretacion.generar_analisis_completo(datos_texto, api_key, proveedor)
+
+    if not resultado["valido"]:
+        st.warning(resultado["mensaje"])
+    else:
+        st.markdown(resultado["texto"])
+        st.caption("Generado por IA a partir de los datos que ya calculó la app — no reemplaza el juicio clínico o epidemiológico profesional.")
+
+
 def app_principal():
     usuario = st.session_state["usuario"]
 
@@ -1578,25 +1711,33 @@ def app_principal():
 
     dashboard_kpis(serie, velocidad, fase)
 
-    tab_resumen, tab_geografia, tab_vias, tab_proyecciones, tab_avanzado = st.tabs(
-        ["📊 Resumen", "🗺️ Geografía", "🦠 Por vía de contagio", "🔮 Proyecciones", "⚙️ Avanzado"]
+    tab_resumen, tab_componentes, tab_geografia, tab_clusters, tab_vias, tab_proyecciones, tab_ia, tab_avanzado = st.tabs(
+        ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🗺️ Geografía", "🧭 Clusters automáticos",
+         "🦠 Por vía de contagio", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "⚙️ Avanzado"]
     )
 
     with tab_resumen:
-        dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
-        dashboard_grafico_componentes(serie, eventos=eventos)
+        dashboard_grafico_principal(serie, usuario_id=usuario["id"], por_via=por_via, eventos=eventos)
+
+    with tab_componentes:
+        dashboard_grafico_componentes(serie, usuario_id=usuario["id"], eventos=eventos)
 
     with tab_geografia:
         dashboard_mapa(usuario["id"], brote["id"])
-        seccion_clusters(usuario["id"], brote["id"])
         dashboard_mapa_calor_semanal(serie)
 
+    with tab_clusters:
+        seccion_clusters(usuario["id"], brote["id"])
+
     with tab_vias:
-        dashboard_comparacion_vias(por_via)
+        dashboard_comparacion_vias(por_via, usuario_id=usuario["id"])
         dashboard_tabla_y_export(serie, vista_sel)
 
     with tab_proyecciones:
         seccion_proyeccion(serie, vista_sel, brote["nombre"], tipo_via_actual)
+
+    with tab_ia:
+        seccion_analisis_ia_brote(usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)
 
     with tab_avanzado:
         seccion_comparar_brotes(usuario["id"], brote["id"])
@@ -1604,7 +1745,7 @@ def app_principal():
         seccion_subregistro(serie, tipo_via_actual)
         seccion_fuentes_externas(usuario["id"], brote["id"], serie)
 
-    seccion_chatbot_interpretacion(serie, velocidad, fase, brote["nombre"], vista_sel)
+    seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
     sugerencia = sm.sugerir_modelo(len(registros), conteo_por_via)
