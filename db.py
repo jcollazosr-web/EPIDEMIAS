@@ -465,11 +465,45 @@ def _geocodificar(pais: str, departamento: str, ciudad: str, barrio: str) -> tup
     return None, None
 
 
+def _geocodificar_inverso(lat: float, lon: float) -> dict:
+    """GPS -> país/departamento/ciudad aproximados, usando Nominatim
+    (reverse geocoding). Es un "mejor esfuerzo": el usuario siempre puede
+    corregir manualmente lo que devuelva antes de guardar."""
+    import requests
+
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
+            headers={"User-Agent": "SeguimientoEpidemiaApp/1.0"},
+            timeout=8,
+        )
+        datos = resp.json().get("address", {})
+        return {
+            "pais": datos.get("country", ""),
+            "departamento": datos.get("state", ""),
+            "ciudad": datos.get("city") or datos.get("town") or datos.get("municipality") or datos.get("village", ""),
+            "barrio": datos.get("suburb") or datos.get("neighbourhood", ""),
+        }
+    except Exception:
+        return {"pais": "", "departamento": "", "ciudad": "", "barrio": ""}
+
+
+def geocodificar_inverso(lat: float, lon: float) -> dict:
+    """Wrapper público de _geocodificar_inverso, para usarlo desde la
+    interfaz cuando se captura la ubicación por GPS."""
+    return _geocodificar_inverso(lat, lon)
+
+
 def obtener_o_crear_ubicacion(
-    usuario_id: str, pais: str, departamento: str = "", ciudad: str = "", barrio: str = ""
+    usuario_id: str, pais: str, departamento: str = "", ciudad: str = "", barrio: str = "",
+    lat_gps: float = None, lon_gps: float = None,
 ) -> dict:
     """Busca una ubicación existente con esos mismos campos; si no existe,
-    la geocodifica y la crea. Evita geocodificar de nuevo algo ya guardado."""
+    la geocodifica y la crea. Evita geocodificar de nuevo algo ya guardado.
+    Si se pasan lat_gps/lon_gps (coordenadas reales del GPS del
+    dispositivo), se usan tal cual en vez de geocodificar por nombre —
+    son más precisas que adivinar la ubicación a partir del texto."""
     client = get_client()
 
     consulta = (
@@ -485,7 +519,10 @@ def obtener_o_crear_ubicacion(
     if consulta.data:
         return consulta.data[0]
 
-    lat, lon = _geocodificar(pais, departamento, ciudad, barrio)
+    if lat_gps is not None and lon_gps is not None:
+        lat, lon = lat_gps, lon_gps
+    else:
+        lat, lon = _geocodificar(pais, departamento, ciudad, barrio)
     res = client.table("ubicaciones").insert({
         "usuario_id": usuario_id,
         "pais": pais,

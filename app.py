@@ -17,6 +17,7 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import extra_streamlit_components as stx
 
 import db
@@ -26,6 +27,8 @@ import clasificacion
 import reportes
 import datos_oficiales
 import interpretacion
+import geografia
+import clusters
 import sugerencia_modelos as sm
 
 LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
@@ -366,9 +369,76 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
                     st.rerun()
 
         st.caption("Ubicación (se geocodifica automáticamente con OpenStreetMap)")
-        pais = st.text_input("País", value="Colombia", key="ubic_pais")
-        departamento = st.text_input("Departamento", key="ubic_depto")
-        ciudad = st.text_input("Ciudad", key="ubic_ciudad")
+
+        # --- Captura por GPS (opcional) -----------------------------------
+        # Streamlit no tiene acceso nativo al GPS del navegador; se usa un
+        # pequeño componente HTML/JS que pide la ubicación y la trae de
+        # vuelta como parámetros en la URL (recarga la página una vez).
+        components.html(
+            """
+            <button id="btn_gps" style="padding:8px 14px;border-radius:6px;border:none;
+                background-color:#303896;color:white;cursor:pointer;font-size:14px;">
+                📍 Usar mi ubicación GPS actual
+            </button>
+            <span id="estado_gps" style="margin-left:8px;font-size:13px;color:#666;"></span>
+            <script>
+            document.getElementById('btn_gps').onclick = function() {
+                const estado = document.getElementById('estado_gps');
+                estado.innerText = 'Solicitando ubicación...';
+                navigator.geolocation.getCurrentPosition(
+                    function(pos) {
+                        const params = new URLSearchParams(window.top.location.search);
+                        params.set('gps_lat', pos.coords.latitude);
+                        params.set('gps_lon', pos.coords.longitude);
+                        window.top.location.search = params.toString();
+                    },
+                    function(err) {
+                        estado.innerText = 'No se pudo obtener la ubicación: ' + err.message;
+                    }
+                );
+            };
+            </script>
+            """,
+            height=40,
+        )
+
+        gps_lat = st.query_params.get("gps_lat")
+        gps_lon = st.query_params.get("gps_lon")
+        lat_gps_valor, lon_gps_valor = None, None
+
+        if gps_lat and gps_lon:
+            lat_gps_valor, lon_gps_valor = float(gps_lat), float(gps_lon)
+            if st.session_state.get("_gps_ultima_coord") != (lat_gps_valor, lon_gps_valor):
+                with st.spinner("Ubicando..."):
+                    resultado_gps = db.geocodificar_inverso(lat_gps_valor, lon_gps_valor)
+                st.session_state["_gps_ultima_coord"] = (lat_gps_valor, lon_gps_valor)
+                st.session_state["_gps_resultado"] = resultado_gps
+            resultado_gps = st.session_state.get("_gps_resultado", {})
+            st.success(
+                f"📍 GPS detectado ({lat_gps_valor:.5f}, {lon_gps_valor:.5f}) — "
+                f"aproximadamente: {resultado_gps.get('ciudad', '?')}, {resultado_gps.get('pais', '?')}. "
+                "Revisa/corrige los campos de abajo si hace falta; se usará esta coordenada exacta."
+            )
+            if st.button("✕ Descartar esta ubicación GPS"):
+                st.query_params.clear()
+                st.session_state.pop("_gps_ultima_coord", None)
+                st.session_state.pop("_gps_resultado", None)
+                st.rerun()
+
+        pais_sel = st.selectbox("País", options=geografia.PAISES, index=0, key="ubic_pais_sel")
+        pais = st.text_input("Escribe el país", key="ubic_pais_manual") if pais_sel == "Otro país (escribir)" else pais_sel
+
+        if pais == "Colombia":
+            depto_sel = st.selectbox("Departamento", options=geografia.DEPARTAMENTOS_COLOMBIA, key="ubic_depto_sel")
+            departamento = st.text_input("Escribe el departamento", key="ubic_depto_manual") if depto_sel == "Otro departamento (escribir)" else depto_sel
+
+            ciudades_disponibles = geografia.CIUDADES_POR_DEPARTAMENTO.get(departamento, []) + [geografia.OPCION_OTRO]
+            ciudad_sel = st.selectbox("Ciudad/Municipio", options=ciudades_disponibles, key="ubic_ciudad_sel")
+            ciudad = st.text_input("Escribe la ciudad/municipio", key="ubic_ciudad_manual") if ciudad_sel == geografia.OPCION_OTRO else ciudad_sel
+        else:
+            departamento = st.text_input("Departamento/Estado/Provincia (opcional)", key="ubic_depto_libre")
+            ciudad = st.text_input("Ciudad", key="ubic_ciudad_libre")
+
         barrio = st.text_input("Barrio (opcional)", key="ubic_barrio")
 
         with st.form("form_captura"):
@@ -383,7 +453,10 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
             via_id = nombres_vias.get(via_sel_nombre)
             ubicacion_id = None
             if pais.strip():
-                ubicacion = db.obtener_o_crear_ubicacion(catalogo_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip())
+                ubicacion = db.obtener_o_crear_ubicacion(
+                    catalogo_id, pais.strip(), departamento.strip(), ciudad.strip(), barrio.strip(),
+                    lat_gps=lat_gps_valor, lon_gps=lon_gps_valor,
+                )
                 ubicacion_id = ubicacion.get("id")
                 if ubicacion and ubicacion.get("latitud") is None:
                     st.warning("No se pudo geocodificar esta dirección (quedó guardada sin coordenadas).")
@@ -394,6 +467,10 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
                 recuperados=int(recuperados),
             )
             st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
+            if gps_lat and gps_lon:
+                st.query_params.clear()
+                st.session_state.pop("_gps_ultima_coord", None)
+                st.session_state.pop("_gps_resultado", None)
             st.rerun()
 
 
@@ -888,6 +965,68 @@ def dashboard_comparacion_vias(por_via: dict):
     _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias")
 
 
+def seccion_clusters(usuario_id: str, brote_id: int):
+    registros = db.obtener_registros(usuario_id, brote_id=brote_id)
+
+    ubicaciones_map = {}
+    for r in registros:
+        uid = r.get("ubicacion_id")
+        ubic = r.get("ubicaciones")
+        if uid and ubic and ubic.get("latitud") is not None:
+            if uid not in ubicaciones_map:
+                etiqueta = ubic.get("ciudad") or ubic.get("departamento") or ubic.get("pais") or "Sin nombre"
+                ubicaciones_map[uid] = {"id": uid, "etiqueta": etiqueta, "latitud": ubic["latitud"], "longitud": ubic["longitud"]}
+    ubicaciones = list(ubicaciones_map.values())
+
+    if len(ubicaciones) < 2:
+        return  # No hay suficientes ubicaciones distintas para agrupar
+
+    with st.expander("🧭 Clusters geográficos automáticos"):
+        st.caption(
+            "Agrupa las ubicaciones cercanas entre sí (por distancia en línea recta) y calcula "
+            "velocidad de transmisión y casos totales de forma independiente para cada foco."
+        )
+        radio = st.slider("Radio de agrupación (km)", min_value=1, max_value=150, value=15, key="radio_cluster")
+        grupos = clusters.detectar_clusters(ubicaciones, radio_km=radio)
+
+        if len(grupos) <= 1:
+            st.caption("Con este radio, todas las ubicaciones caen en un solo cluster — prueba un radio más pequeño para separar focos distintos.")
+
+        filas_resumen = []
+        for i, g in enumerate(grupos):
+            ids_g = {u["id"] for u in g}
+            regs_g = [r for r in registros if r.get("ubicacion_id") in ids_g]
+            serie_g = calculos.recalcular_serie(regs_g)
+            vel_g = calculos.tasa_crecimiento_y_duplicacion(serie_g)
+            filas_resumen.append({
+                "Cluster": f"Cluster {i + 1}",
+                "Ubicaciones": clusters.etiquetar_cluster(g),
+                "Casos totales": sum(r["casos_nuevos"] for r in regs_g),
+                "Tasa de crecimiento (r)": round(vel_g["tasa_r"], 3) if vel_g["tasa_r"] is not None else None,
+                "Días para duplicar": round(vel_g["dias_duplicacion"], 1) if vel_g["dias_duplicacion"] is not None else None,
+            })
+
+        st.dataframe(pd.DataFrame(filas_resumen), use_container_width=True, hide_index=True)
+
+        etiquetas_grupos = [f["Cluster"] for f in filas_resumen]
+        cluster_sel = st.selectbox("Ver el detalle de un cluster:", options=etiquetas_grupos, key="cluster_seleccionado")
+        idx = etiquetas_grupos.index(cluster_sel)
+        fila_sel = filas_resumen[idx]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Casos totales", fila_sel["Casos totales"])
+        c2.metric("Tasa de crecimiento (r)", fila_sel["Tasa de crecimiento (r)"] if fila_sel["Tasa de crecimiento (r)"] is not None else "N/D")
+        c3.metric("Días para duplicar", fila_sel["Días para duplicar"] if fila_sel["Días para duplicar"] is not None else "N/D")
+        st.caption(f"Ubicaciones en este cluster: {fila_sel['Ubicaciones']}")
+
+        resumen_ia = "; ".join(
+            f"{f['Cluster']} ({f['Ubicaciones']}): {f['Casos totales']} casos totales, "
+            f"tasa de crecimiento r={f['Tasa de crecimiento (r)']}"
+            for f in filas_resumen
+        )
+        _boton_analisis_descriptivo("Clusters geográficos del brote", resumen_ia, key="clusters")
+
+
 def dashboard_mapa_calor_semanal(serie: list):
     """Mapa de calor tipo calendario: día de la semana vs. semana del
     año, con la intensidad de color según casos nuevos — revela patrones
@@ -1379,6 +1518,7 @@ def app_principal():
 
     dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
     dashboard_mapa(usuario["id"], brote["id"])
+    seccion_clusters(usuario["id"], brote["id"])
 
     dashboard_grafico_componentes(serie, eventos=eventos)
     dashboard_comparacion_vias(por_via)

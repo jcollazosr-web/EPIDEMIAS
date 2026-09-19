@@ -215,6 +215,32 @@ o ubicación) sigue restringida al dueño del catálogo.
 - **Layout en columnas**: el gráfico principal y el mapa de casos ahora
   van lado a lado en pantallas anchas, en vez de apilados.
 
+### Lote: geolocalización mejorada + clusters automáticos
+- **Menús desplegables de país/departamento/ciudad** en vez de texto
+  libre — evita errores ortográficos que rompían la geocodificación.
+  Colombia tiene los 33 departamentos y ciudades principales por
+  departamento; siempre hay una opción "Otro/a (escribir)" para lo que
+  no esté en la lista (`geografia.py`).
+- **Casos el mismo día en lugares distintos**: ya era posible a nivel
+  de base de datos (la restricción única incluye la ubicación); con los
+  menús desplegables ahora es más rápido cambiar de ubicación entre un
+  registro y otro sin volver a escribir todo.
+- **Clusters geográficos automáticos** (`clusters.py`): agrupa las
+  ubicaciones del brote por cercanía (distancia en línea recta,
+  Union-Find) y calcula casos totales y velocidad de transmisión de
+  forma INDEPENDIENTE para cada cluster — con un radio ajustable y
+  botón de análisis descriptivo con IA sobre los clusters detectados.
+- **Sobre Google Maps**: se evaluó pero se recomienda mantener
+  OpenStreetMap (gratis, sin tarjeta de crédito) — Google Maps requiere
+  facturación de Google Cloud más allá de su crédito mensual gratuito.
+
+- **Captura de ubicación por GPS**: botón "📍 Usar mi ubicación GPS
+  actual" en el formulario de captura — pide el GPS del navegador/celular
+  y usa esa coordenada exacta (con geocodificación inversa para sugerir
+  país/ciudad), en vez de depender de escribir el nombre del lugar.
+  ⚠️ No se pudo probar en vivo desde el entorno de desarrollo (mismo
+  límite de red de siempre) — pruébalo tú en la app desplegada.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
