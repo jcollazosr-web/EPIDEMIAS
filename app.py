@@ -25,7 +25,7 @@ import calculos
 import proyecciones
 import clasificacion
 import reportes
-import datos_oficiales
+import fuentes_externas
 import interpretacion
 import geografia
 import clusters
@@ -1080,7 +1080,7 @@ def dashboard_tabla_y_export(serie: list, nombre_serie: str):
         )
 
 
-def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str):
+def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, tipo_via: str = None):
     st.markdown("#### Proyección a futuro")
     n_dias_disponibles = len([r for r in serie if r.get("casos_activos") is not None])
     opciones_modelo = ["Regresión log-lineal (±2σ)"]
@@ -1110,7 +1110,7 @@ def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str):
             tabla_combinada = proyecciones.descomponer_proyeccion_desde_activos(serie, activos_futuros)
             mensaje_modelo = resultado["mensaje"]
     else:
-        resultado = proyecciones.ajustar_crecimiento_logistico(serie, dias_futuros=dias_futuros)
+        resultado = proyecciones.ajustar_crecimiento_logistico(serie, dias_futuros=dias_futuros, tipo_via=tipo_via)
         _mostrar_proyeccion_logistica(resultado, serie)
         if resultado["valido"]:
             nuevos_futuros = [{"fecha": p["fecha"], "valor": p["casos_nuevos_proyectados"]} for p in resultado["proyeccion"]]
@@ -1229,6 +1229,16 @@ def _mostrar_proyeccion_logistica(resultado: dict, serie: list):
     c1.metric("K (techo estimado)", f"{resultado['K_techo_estimado']:.0f}")
     c2.metric("r (tasa de crecimiento)", f"{resultado['r_tasa_crecimiento']:.3f}")
     c3.metric("Días usados en el ajuste", resultado["n_dias_usados_en_ajuste"])
+
+    if "r0_efectivo_estimado" in resultado:
+        cc1, cc2 = st.columns(2)
+        cc1.metric("R0 efectivo (estimado de tus datos)", f"{resultado['r0_efectivo_estimado']:.2f}")
+        rango = resultado["r0_rango_tipico_via"]
+        cc2.metric(
+            "Rango típico para esta vía", f"{rango[0]}–{rango[1]}",
+            delta="Dentro de lo esperado" if resultado["r0_dentro_de_rango_tipico"] else "⚠️ Fuera de lo esperado",
+            delta_color="normal" if resultado["r0_dentro_de_rango_tipico"] else "inverse",
+        )
 
     # Este modelo proyecta CASOS ACUMULADOS (no activos), así que se
     # compara contra el acumulado histórico — no contra casos_activos,
@@ -1441,30 +1451,82 @@ def seccion_chatbot_interpretacion(serie: list, velocidad: dict, fase: dict, bro
                 st.markdown(resultado["texto"])
 
 
-def seccion_datos_oficiales(serie: list):
-    with st.expander("🏛️ Comparar con Datos Abiertos Colombia"):
+def seccion_fuentes_externas(usuario_id: str, brote_id: int, serie: list):
+    with st.expander("🌐 Fuentes de datos externas"):
         st.caption(
-            "Compara tus casos contra el dataset oficial de COVID-19 en datos.gov.co, filtrado "
-            "por departamento. Si tu brote es de otra enfermedad, este dataset específico no "
-            "aplicará — es un ejemplo configurado por defecto (ver datos_oficiales.py)."
+            "Conecta datasets públicos (Socrata: cientos de portales gubernamentales en el mundo, "
+            "incluido datos.gov.co) o cualquier API REST que devuelva JSON, para comparar contra tus "
+            "propios datos. Es de solo lectura — no requiere credenciales."
         )
-        departamento = st.text_input("Departamento (como aparece en el dataset oficial)", value="Valle del Cauca")
-        fechas_disponibles = [r["fecha"] for r in serie]
-        if not fechas_disponibles:
-            return
-        fecha_desde = str(fechas_disponibles[0])[:10]
-        fecha_hasta = str(fechas_disponibles[-1])[:10]
 
-        if st.button("Consultar cifras oficiales"):
-            with st.spinner("Consultando datos.gov.co..."):
-                resultado = datos_oficiales.obtener_casos_oficiales_por_departamento(departamento, fecha_desde, fecha_hasta)
+        fuentes = db.listar_fuentes_externas(brote_id)
+        if fuentes:
+            st.markdown("**Fuentes guardadas en este brote:**")
+            for f in fuentes:
+                cf1, cf2 = st.columns([4, 1])
+                cf1.caption(f"{f['nombre']} ({f['tipo']})")
+                if cf2.button("✕", key=f"del_fuente_{f['id']}"):
+                    db.eliminar_fuente_externa(f["id"])
+                    st.rerun()
+
+        with st.form("form_nueva_fuente"):
+            nombre_fuente = st.text_input("Nombre para identificarla (ej. 'COVID Colombia')")
+            tipo_fuente = st.selectbox("Tipo de fuente", options=["socrata", "api_rest"], format_func=lambda t: "Socrata (portal de datos abiertos)" if t == "socrata" else "API REST genérica (JSON)")
+
+            if tipo_fuente == "socrata":
+                dominio = st.text_input("Dominio (sin https://)", placeholder="www.datos.gov.co")
+                dataset_id = st.text_input("ID del dataset", placeholder="gt2j-8ykr")
+                campo_filtro = st.text_input("Campo para filtrar (opcional)", placeholder="departamento")
+                campo_fecha = st.text_input("Campo de fecha (opcional)", placeholder="fecha_reporte_web")
+            else:
+                url_api = st.text_input("URL del endpoint (debe devolver JSON)")
+                ruta_lista = st.text_input("Ruta hasta la lista de registros (opcional)", placeholder="ej. data.items — vacío si la respuesta ya es una lista")
+
+            guardar_fuente = st.form_submit_button("Guardar fuente")
+
+        if guardar_fuente and nombre_fuente.strip():
+            if tipo_fuente == "socrata":
+                config = {"dominio": dominio.strip(), "dataset_id": dataset_id.strip(), "campo_filtro": campo_filtro.strip(), "campo_fecha": campo_fecha.strip()}
+            else:
+                config = {"url": url_api.strip(), "ruta_lista": ruta_lista.strip()}
+            db.crear_fuente_externa(brote_id, usuario_id, nombre_fuente, tipo_fuente, config)
+            st.success("Fuente guardada.")
+            st.rerun()
+
+        if not fuentes:
+            return
+
+        st.divider()
+        nombres_fuentes = [f["nombre"] for f in fuentes]
+        fuente_sel_nombre = st.selectbox("Consultar:", options=nombres_fuentes, key="fuente_externa_seleccionada")
+        fuente_sel = next(f for f in fuentes if f["nombre"] == fuente_sel_nombre)
+        cfg = fuente_sel["configuracion"]
+
+        valor_filtro = None
+        if fuente_sel["tipo"] == "socrata" and cfg.get("campo_filtro"):
+            valor_filtro = st.text_input(f"Valor para '{cfg['campo_filtro']}'", key="valor_filtro_fuente")
+
+        if st.button("Consultar esta fuente"):
+            fechas_disponibles = [r["fecha"] for r in serie]
+            with st.spinner("Consultando..."):
+                if fuente_sel["tipo"] == "socrata":
+                    resultado = fuentes_externas.consultar_socrata(
+                        dominio=cfg["dominio"], dataset_id=cfg["dataset_id"],
+                        campo_filtro=cfg.get("campo_filtro") or None, valor_filtro=valor_filtro,
+                        campo_fecha=cfg.get("campo_fecha") or None,
+                        fecha_desde=str(fechas_disponibles[0])[:10] if fechas_disponibles else None,
+                        fecha_hasta=str(fechas_disponibles[-1])[:10] if fechas_disponibles else None,
+                    )
+                else:
+                    resultado = fuentes_externas.consultar_api_rest(cfg["url"], cfg.get("ruta_lista", ""))
+
             if not resultado["valido"]:
                 st.warning(resultado["mensaje"])
             else:
                 st.caption(resultado["mensaje"])
-                df_oficial = pd.DataFrame(resultado["datos"])
-                if not df_oficial.empty:
-                    st.dataframe(df_oficial, use_container_width=True, hide_index=True)
+                df_externo = pd.DataFrame(resultado["datos"])
+                if not df_externo.empty:
+                    st.dataframe(df_externo, use_container_width=True, hide_index=True)
 
 
 # =======================================================================
@@ -1516,19 +1578,32 @@ def app_principal():
 
     dashboard_kpis(serie, velocidad, fase)
 
-    dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
-    dashboard_mapa(usuario["id"], brote["id"])
-    seccion_clusters(usuario["id"], brote["id"])
+    tab_resumen, tab_geografia, tab_vias, tab_proyecciones, tab_avanzado = st.tabs(
+        ["📊 Resumen", "🗺️ Geografía", "🦠 Por vía de contagio", "🔮 Proyecciones", "⚙️ Avanzado"]
+    )
 
-    dashboard_grafico_componentes(serie, eventos=eventos)
-    dashboard_comparacion_vias(por_via)
-    dashboard_mapa_calor_semanal(serie)
-    dashboard_tabla_y_export(serie, vista_sel)
-    seccion_proyeccion(serie, vista_sel, brote["nombre"])
-    seccion_comparar_brotes(usuario["id"], brote["id"])
-    seccion_historial_cambios(brote["id"])
-    seccion_subregistro(serie, tipo_via_actual)
-    seccion_datos_oficiales(serie)
+    with tab_resumen:
+        dashboard_grafico_principal(serie, por_via=por_via, eventos=eventos)
+        dashboard_grafico_componentes(serie, eventos=eventos)
+
+    with tab_geografia:
+        dashboard_mapa(usuario["id"], brote["id"])
+        seccion_clusters(usuario["id"], brote["id"])
+        dashboard_mapa_calor_semanal(serie)
+
+    with tab_vias:
+        dashboard_comparacion_vias(por_via)
+        dashboard_tabla_y_export(serie, vista_sel)
+
+    with tab_proyecciones:
+        seccion_proyeccion(serie, vista_sel, brote["nombre"], tipo_via_actual)
+
+    with tab_avanzado:
+        seccion_comparar_brotes(usuario["id"], brote["id"])
+        seccion_historial_cambios(brote["id"])
+        seccion_subregistro(serie, tipo_via_actual)
+        seccion_fuentes_externas(usuario["id"], brote["id"], serie)
+
     seccion_chatbot_interpretacion(serie, velocidad, fase, brote["nombre"], vista_sel)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])

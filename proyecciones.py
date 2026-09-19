@@ -18,6 +18,8 @@ from datetime import timedelta
 
 import numpy as np
 
+from clasificacion import obtener_perfil_r0
+
 
 N_SIGMAS = 2  # ±2 desviaciones estándar ≈ 95% de cobertura
 
@@ -86,7 +88,7 @@ def proyectar_regresion_log_lineal(serie: list[dict], dias_futuros: int = 7) -> 
     }
 
 
-def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> dict:
+def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7, tipo_via: str = None) -> dict:
     """
     Ajusta un modelo de crecimiento logístico a los CASOS ACUMULADOS:
 
@@ -100,6 +102,13 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
 
     Requiere al menos 8 puntos porque son 3 parámetros a estimar (K, r, t0)
     y con menos datos el ajuste no converge de forma confiable.
+
+    Si se indica `tipo_via` (respiratoria, zoonótica, etc.), su R0 de
+    referencia se usa como PUNTO DE PARTIDA del ajuste (no como un valor
+    impuesto — el ajuste sigue basándose en tus datos reales), y además
+    se calcula el R0 EFECTIVO que tus propios datos implican, para
+    compararlo contra lo típico de esa vía — así la vía deja de ser solo
+    una etiqueta y pasa a informar la simulación.
     """
     try:
         from scipy.optimize import curve_fit
@@ -120,9 +129,20 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
     def logistico(t, K, r, t0):
         return K / (1 + np.exp(-r * (t - t0)))
 
+    # Punto de partida del parámetro r: si conocemos el tipo de vía, se
+    # usa su R0 de referencia (vía la relación R0 ≈ 1 + r·T_generacional)
+    # en vez del valor genérico 0.3 — ayuda a converger mejor,
+    # especialmente con pocos datos.
+    r_inicial = 0.3
+    perfil_via = None
+    if tipo_via:
+        perfil_via = obtener_perfil_r0(tipo_via)
+        t_gen = perfil_via["intervalo_generacional_dias"]
+        r_inicial = (perfil_via["r0_sugerido"] - 1) / t_gen
+
     try:
         K0 = max(acumulado) * 2
-        p0 = [K0, 0.3, float(np.median(t))]
+        p0 = [K0, r_inicial, float(np.median(t))]
         parametros, _ = curve_fit(logistico, t, acumulado, p0=p0, maxfev=5000)
         K, r, t0 = parametros
     except Exception:
@@ -162,7 +182,7 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
         })
         acumulado_anterior = acumulado_futuro
 
-    return {
+    resultado = {
         "valido": True,
         "mensaje": (
             "Modelo de crecimiento logístico (equivalente a un SIR simplificado sin "
@@ -176,6 +196,23 @@ def ajustar_crecimiento_logistico(serie: list[dict], dias_futuros: int = 7) -> d
         "n_dias_usados_en_ajuste": len(puntos),
         "proyeccion": proyeccion,
     }
+
+    if perfil_via:
+        t_gen = perfil_via["intervalo_generacional_dias"]
+        r0_efectivo = 1 + r * t_gen
+        rango_min, rango_max = perfil_via["rango"]
+        dentro_de_rango = rango_min <= r0_efectivo <= rango_max
+        resultado["r0_efectivo_estimado"] = r0_efectivo
+        resultado["r0_tipico_via"] = perfil_via["r0_sugerido"]
+        resultado["r0_rango_tipico_via"] = perfil_via["rango"]
+        resultado["r0_dentro_de_rango_tipico"] = dentro_de_rango
+        resultado["mensaje"] += (
+            f" R0 efectivo estimado desde tus datos: {r0_efectivo:.2f} "
+            f"({'dentro' if dentro_de_rango else '⚠️ fuera'} del rango típico "
+            f"{rango_min}-{rango_max} para {perfil_via['etiqueta']})."
+        )
+
+    return resultado
 
 
 def ajustar_arima(serie: list[dict], dias_futuros: int = 7, orden: tuple = (1, 1, 1)) -> dict:

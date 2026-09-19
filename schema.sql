@@ -574,3 +574,28 @@ create policy "eventos_delete_acceso_brote" on eventos_brote for delete
     using (exists (select 1 from brotes b where b.id = eventos_brote.brote_id
         and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
 create index if not exists idx_eventos_brote on eventos_brote (brote_id);
+
+-- =========================================================================
+-- MIGRACIÓN: Fuentes de datos externas configurables (reemplaza el
+-- módulo fijo anterior de "Datos Abiertos Colombia")
+-- =========================================================================
+create table if not exists fuentes_externas_brote (
+    id             bigint generated always as identity primary key,
+    brote_id       bigint references brotes(id) on delete cascade not null,
+    usuario_id     uuid references auth.users(id) on delete cascade not null,
+    nombre         text not null,
+    tipo           text not null check (tipo in ('socrata', 'api_rest')),
+    configuracion  jsonb not null,
+    creado_en      timestamptz default now()
+);
+alter table fuentes_externas_brote enable row level security;
+create policy "fuentes_externas_select_acceso_brote" on fuentes_externas_brote for select
+    using (exists (select 1 from brotes b where b.id = fuentes_externas_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create policy "fuentes_externas_insert_acceso_brote" on fuentes_externas_brote for insert
+    with check (exists (select 1 from brotes b where b.id = fuentes_externas_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create policy "fuentes_externas_delete_acceso_brote" on fuentes_externas_brote for delete
+    using (exists (select 1 from brotes b where b.id = fuentes_externas_brote.brote_id
+        and (b.usuario_id = auth.uid() or exists (select 1 from colaboradores_brote c where c.brote_id = b.id and c.usuario_id = auth.uid()))));
+create index if not exists idx_fuentes_externas_brote on fuentes_externas_brote (brote_id);

@@ -241,6 +241,30 @@ o ubicación) sigue restringida al dueño del catálogo.
   ⚠️ No se pudo probar en vivo desde el entorno de desarrollo (mismo
   límite de red de siempre) — pruébalo tú en la app desplegada.
 
+- **Dashboard reorganizado en pestañas por tema** (📊 Resumen, 🗺️
+  Geografía, 🦠 Por vía, 🔮 Proyecciones, ⚙️ Avanzado) en vez de un
+  scroll largo con todo mezclado — sin cambiar la lógica de ningún
+  gráfico, solo su organización.
+
+- **La vía de contagio ahora influye realmente en las simulaciones**
+  (antes solo era una etiqueta de filtro): el R0 típico de la vía se usa
+  como punto de partida del ajuste del modelo logístico, y se calcula el
+  **R0 efectivo que tus propios datos implican**, comparándolo contra el
+  rango típico de esa vía — con una alerta visual si tu R0 observado
+  está fuera de lo esperado (señal de que quizás cambió el patrón de
+  transmisión, o que la vía asignada no es la correcta).
+
+- **Fuentes de datos externas configurables** (`fuentes_externas.py`),
+  reemplazando el módulo anterior que estaba fijo a un solo dataset de
+  Colombia: ahora cualquier usuario puede conectar CUALQUIER dataset de
+  Socrata (cientos de portales de datos abiertos en el mundo) o
+  cualquier API REST que devuelva JSON, sin necesidad de credenciales.
+  Las fuentes se guardan por brote y quedan disponibles para
+  colaboradores. Conectar bases de datos SQL externas reales (ej. el
+  servidor de una IPS) se evaluó pero NO se implementó — requiere
+  guardar credenciales y trae riesgos de seguridad (inyección SQL) que
+  van más allá de una integración de solo lectura a datos públicos.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

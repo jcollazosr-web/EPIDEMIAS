@@ -245,6 +245,30 @@ def eliminar_evento(evento_id: int) -> None:
 
 
 # ---------------------------------------------------------------------
+# Fuentes de datos externas configurables (reemplaza el módulo fijo
+# anterior de "Datos Abiertos Colombia")
+# ---------------------------------------------------------------------
+def listar_fuentes_externas(brote_id: int) -> list[dict]:
+    client = get_client()
+    res = client.table("fuentes_externas_brote").select("*").eq("brote_id", brote_id).order("creado_en").execute()
+    return res.data or []
+
+
+def crear_fuente_externa(brote_id: int, usuario_id: str, nombre: str, tipo: str, configuracion: dict) -> dict:
+    client = get_client()
+    res = client.table("fuentes_externas_brote").insert({
+        "brote_id": brote_id, "usuario_id": usuario_id, "nombre": nombre.strip(),
+        "tipo": tipo, "configuracion": configuracion,
+    }).execute()
+    return res.data[0] if res.data else {}
+
+
+def eliminar_fuente_externa(fuente_id: int) -> None:
+    client = get_client()
+    client.table("fuentes_externas_brote").delete().eq("id", fuente_id).execute()
+
+
+# ---------------------------------------------------------------------
 # Vías de contagio
 # ---------------------------------------------------------------------
 def listar_vias(usuario_id: str) -> list[dict]:
