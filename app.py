@@ -323,18 +323,23 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
         db.asegurar_brote_por_defecto(usuario_id)
         brotes = db.listar_brotes(usuario_id)
     except Exception:
-        # Si la sesión quedó en un estado inconsistente (ej. justo tras
-        # cerrar sesión, o un token vencido a mitad de una acción), no
-        # dejamos que la app se caiga con un traceback — se limpia todo
-        # y se pide iniciar sesión de nuevo, que es la solución real.
-        st.error("Tu sesión ya no es válida. Por favor inicia sesión de nuevo.")
+        # La sesión quedó en un estado inconsistente (ej. justo tras
+        # cerrar sesión, o un token vencido a mitad de una acción) — se
+        # fuerza un cierre de sesión REAL y completo (servidor + cookies
+        # + estado local), y se manda a la persona limpiamente a la
+        # pantalla de login, en vez de intentar adivinar si se puede
+        # recuperar sola.
+        st.error("Tu sesión ya no es válida. Cerrando sesión...")
         db.cerrar_sesion()
+        cookie_manager.delete("access_token", key="del_access_token_recuperacion")
+        cookie_manager.delete("refresh_token", key="del_refresh_token_recuperacion")
         st.session_state.pop("usuario", None)
         st.session_state.pop("_supabase_client", None)
         st.session_state["_acabamos_de_cerrar_sesion"] = True
-        if st.button("Volver a iniciar sesión"):
-            st.rerun()
-        st.stop()
+        st.session_state.pop("_intentos_recuperacion_sesion", None)
+        st.rerun()
+
+    st.session_state.pop("_intentos_recuperacion_sesion", None)
 
     etiquetas = {
         f"{b['nombre']}" + ("" if b.get("es_dueno", b["usuario_id"] == usuario_id) else " (colaborador)"): b
