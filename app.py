@@ -186,6 +186,30 @@ def pantalla_login():
         unsafe_allow_html=True,
     )
     st.write("")
+
+    with st.expander("¿Qué incluye cada versión?"):
+        col_gratis, col_pro = st.columns(2)
+        with col_gratis:
+            st.markdown("#### 🆓 Gratis")
+            st.markdown(
+                "- Registro de casos y brotes\n"
+                "- Colaboradores y dashboard público\n"
+                "- Activos, recuperados y fallecidos\n"
+                "- Clusters geográficos automáticos\n"
+                "- Comparación por vía de contagio\n"
+                "- Proyecciones (regresión, logístico, ARIMA)\n"
+                "- Comparar brotes, historial, exportar PDF/Excel"
+            )
+        with col_pro:
+            st.markdown("#### 💎 PRO")
+            st.markdown(
+                "- Todo lo del plan Gratis, más:\n"
+                "- 🗺️ Mapa geográfico de casos\n"
+                "- 🤖 Análisis del brote con Inteligencia Artificial\n"
+                "- 📈 Canales Endémicos (comparación histórica por semana epidemiológica)"
+            )
+
+    st.write("")
     tab_login, tab_registro, tab_recuperar = st.tabs(
         ["Iniciar sesión", "Crear cuenta", "Olvidé mi contraseña"]
     )
@@ -255,7 +279,7 @@ def pantalla_login():
 # BARRA LATERAL — todo lo que es entrada/control de datos
 # =======================================================================
 def barra_lateral_sesion(usuario: dict):
-    st.image(RUTA_LOGO_ICONO, width=180)
+    st.markdown("### Fundación Juan Manuel Collazos")
     st.markdown(f"**Sesión:** {usuario['email']}")
 
     with st.expander("❓ Cómo usar esta app"):
@@ -1649,11 +1673,11 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
         puntos = df_mapa[["longitud", "latitud"]].values.tolist()
         try:
             vista = compute_view(puntos, view_proportion=0.9)
-            vista.zoom = min(vista.zoom, 14)  # evita un acercamiento exagerado si los puntos están muy juntos
+            vista.zoom = min(vista.zoom, 10)  # evita un acercamiento exagerado si los puntos están muy juntos
         except Exception:
             # compute_view falla con una sola ubicación (bug conocido de
             # pydeck) — en ese caso, centramos ahí con un zoom fijo razonable.
-            vista = pdk.ViewState(latitude=float(df_mapa["latitud"].mean()), longitude=float(df_mapa["longitud"].mean()), zoom=12)
+            vista = pdk.ViewState(latitude=float(df_mapa["latitud"].mean()), longitude=float(df_mapa["longitud"].mean()), zoom=9)
 
         capa = pdk.Layer("ScatterplotLayer", data=df_mapa, get_position="[longitud, latitud]",
                           get_radius="radio", get_fill_color="[158, 51, 178, 160]", pickable=True)
