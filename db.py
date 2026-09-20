@@ -129,6 +129,14 @@ def actualizar_plan_usuario_admin(usuario_id: str, plan: str) -> None:
     client.rpc("admin_actualizar_plan_usuario", {"p_usuario_id": usuario_id, "p_plan": plan}).execute()
 
 
+def listar_pagos_bold(limite: int = 50) -> list[dict]:
+    """Historial de pagos de Bold procesados por el webhook — solo
+    visible para admin (lo aplica la RLS de la tabla, no este código)."""
+    client = get_client()
+    res = client.table("pagos_bold_procesados").select("*").order("procesado_en", desc=True).limit(limite).execute()
+    return res.data or []
+
+
 # ---------------------------------------------------------------------
 # Canales endémicos (función PRO)
 # ---------------------------------------------------------------------

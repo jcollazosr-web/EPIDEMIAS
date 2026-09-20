@@ -728,3 +728,26 @@ create policy "canal_datos_update_propio" on canal_endemico_datos for update
 create policy "canal_datos_delete_propio" on canal_endemico_datos for delete
     using (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()));
 create index if not exists idx_canal_datos_canal on canal_endemico_datos (canal_id);
+
+-- =========================================================================
+-- MIGRACIÓN: Activación automática de PRO vía webhook de Bold
+-- =========================================================================
+create table if not exists pagos_bold_procesados (
+    payment_id      text primary key,
+    payer_email     text,
+    usuario_id      uuid references auth.users(id),
+    monto           numeric,
+    estado          text not null check (estado in ('activado', 'sin_match', 'error')),
+    detalle         text,
+    procesado_en    timestamptz default now()
+);
+alter table pagos_bold_procesados enable row level security;
+create policy "pagos_bold_select_admin" on pagos_bold_procesados for select
+    using (exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin'));
+
+-- La Edge Function 'bold-webhook' (ver supabase_functions/bold-webhook/index.ts)
+-- recibe las notificaciones de Bold, verifica su firma HMAC-SHA256, y
+-- activa el plan PRO del usuario cuyo correo coincida con payer_email.
+-- URL: https://ztvwvlokqeuwqnuraslx.supabase.co/functions/v1/bold-webhook
+-- Requiere configurar el secret BOLD_WEBHOOK_SECRET en el panel de
+-- Supabase (Edge Functions > bold-webhook > Secrets).

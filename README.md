@@ -294,6 +294,18 @@ o ubicación) sigue restringida al dueño del catálogo.
   excepción no manejada en el dashboard ahora muestra un mensaje
   amigable con botón de recarga, en vez de un traceback crudo.
 
+- **Activación automática de PRO al pagar con Bold**: nueva Edge
+  Function `bold-webhook` (`supabase_functions/bold-webhook/index.ts`)
+  que recibe la notificación de pago de Bold, verifica su firma
+  HMAC-SHA256 (nunca procesa sin ella), y activa el plan PRO del
+  usuario cuyo correo coincida con el correo del pagador. Con
+  idempotencia (no reprocesa el mismo pago dos veces) y un registro de
+  auditoría (`pagos_bold_procesados`) visible en el panel de admin,
+  incluyendo los pagos sin coincidencia automática para resolverlos a
+  mano. Limitación conocida: solo funciona si la persona paga con el
+  mismo correo de su cuenta en EpiScan (el Payment Link de Bold es
+  fijo, no genera una referencia por usuario).
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

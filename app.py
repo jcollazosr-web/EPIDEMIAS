@@ -764,6 +764,24 @@ def seccion_lateral_admin(usuario_id: str):
                     del st.session_state[f"confirmar_del_{u['usuario_id']}"]
                     st.rerun()
 
+        st.divider()
+        st.markdown("**💳 Pagos de Bold (activación automática de PRO)**")
+        pagos = db.listar_pagos_bold()
+        if not pagos:
+            st.caption("Todavía no se ha procesado ningún pago por el webhook.")
+        else:
+            df_pagos = pd.DataFrame(pagos)[["procesado_en", "payer_email", "monto", "estado", "detalle"]]
+            df_pagos = df_pagos.rename(columns={
+                "procesado_en": "Fecha", "payer_email": "Correo del pagador", "monto": "Monto",
+                "estado": "Estado", "detalle": "Detalle",
+            })
+            st.dataframe(df_pagos, use_container_width=True, hide_index=True)
+            if (pd.DataFrame(pagos)["estado"] == "sin_match").any():
+                st.warning(
+                    "Hay pagos sin coincidencia automática (correo distinto al de la cuenta) — actívalos "
+                    "manualmente arriba, en la lista de usuarios, buscando su cuenta por correo."
+                )
+
 
 def seccion_canales_endemicos(usuario_id: str):
     st.markdown("### 📈 Canales Endémicos")
@@ -1607,6 +1625,10 @@ def _mostrar_proyeccion_logistica(resultado: dict, serie: list):
 
 
 def dashboard_mapa(usuario_id: str, brote_id: int):
+    if not db.tiene_ia_habilitada(usuario_id):
+        _mostrar_aviso_ia_pro()
+        return
+
     registros = db.obtener_registros(usuario_id, brote_id=brote_id)
     ubicaciones_agregadas = calculos.agregar_casos_por_ubicacion(registros)
     if not ubicaciones_agregadas:
@@ -1616,10 +1638,23 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
     df_mapa = pd.DataFrame(ubicaciones_agregadas)
     try:
         import pydeck as pdk
+        from pydeck.data_utils import compute_view
 
         radio_max = float(df_mapa["casos_totales"].max()) or 1.0
         df_mapa["radio"] = 300 + (df_mapa["casos_totales"] / radio_max) * 3000
-        vista = pdk.ViewState(latitude=float(df_mapa["latitud"].mean()), longitude=float(df_mapa["longitud"].mean()), zoom=4)
+
+        # Zoom automático: encuadra todas las ubicaciones con casos, en
+        # vez de un zoom fijo que puede quedar muy alejado (una sola
+        # ciudad) o muy cercano (casos repartidos en todo el país).
+        puntos = df_mapa[["longitud", "latitud"]].values.tolist()
+        try:
+            vista = compute_view(puntos, view_proportion=0.9)
+            vista.zoom = min(vista.zoom, 14)  # evita un acercamiento exagerado si los puntos están muy juntos
+        except Exception:
+            # compute_view falla con una sola ubicación (bug conocido de
+            # pydeck) — en ese caso, centramos ahí con un zoom fijo razonable.
+            vista = pdk.ViewState(latitude=float(df_mapa["latitud"].mean()), longitude=float(df_mapa["longitud"].mean()), zoom=12)
+
         capa = pdk.Layer("ScatterplotLayer", data=df_mapa, get_position="[longitud, latitud]",
                           get_radius="radio", get_fill_color="[158, 51, 178, 160]", pickable=True)
         tooltip = {"html": "<b>{etiqueta_completa}</b><br/>Casos: {casos_totales}<br/>Fallecidos: {fallecidos_totales}"}
@@ -1971,8 +2006,8 @@ def app_principal():
     dashboard_kpis(serie, velocidad, fase)
     seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
 
-    tab_resumen, tab_componentes, tab_geografia, tab_clusters, tab_vias, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
-        ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🗺️ Geografía", "🧭 Clusters automáticos",
+    tab_resumen, tab_componentes, tab_clusters, tab_geografia, tab_vias, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
+        ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🧭 Clusters automáticos", "🗺️ Geografía",
          "🦠 Por vía de contagio", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
     )
 
@@ -1982,12 +2017,12 @@ def app_principal():
     with tab_componentes:
         _ejecutar_seguro(dashboard_grafico_componentes, serie, usuario_id=usuario["id"], eventos=eventos)
 
+    with tab_clusters:
+        _ejecutar_seguro(seccion_clusters, usuario["id"], brote["id"])
+
     with tab_geografia:
         _ejecutar_seguro(dashboard_mapa, usuario["id"], brote["id"])
         _ejecutar_seguro(dashboard_mapa_calor_semanal, serie)
-
-    with tab_clusters:
-        _ejecutar_seguro(seccion_clusters, usuario["id"], brote["id"])
 
     with tab_vias:
         _ejecutar_seguro(dashboard_comparacion_vias, por_via, usuario_id=usuario["id"])
