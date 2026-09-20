@@ -306,6 +306,18 @@ o ubicación) sigue restringida al dueño del catálogo.
   mismo correo de su cuenta en EpiScan (el Payment Link de Bold es
   fijo, no genera una referencia por usuario).
 
+- **Panel de diagnóstico del sistema** en 🔑 Administrador: un botón
+  corre en vivo una batería de chequeos (conexión a la base de datos,
+  funciones RPC, cálculos base, modelo de proyección, clusters, y
+  proveedor de IA configurado) y muestra ✅/❌ por cada uno — para
+  detectar problemas sin depender de que un usuario los reporte primero.
+- **Caché de rendimiento** para brotes con muchos datos: la lectura de
+  registros y la detección de clusters (O(n²)) ahora se cachean por 2
+  minutos, con invalidación automática apenas se guarda/edita/elimina
+  un registro (nunca se ve un dato desactualizado).
+- **Pantalla de bienvenida** para brotes recién creados sin registros
+  todavía: 3 pasos claros en vez de un solo mensaje genérico.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

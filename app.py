@@ -530,6 +530,7 @@ def seccion_lateral_captura(usuario_id: str, brote: dict):
                     ubicacion_id=ubicacion_id, casos_nuevos=int(casos_nuevos), fallecidos=int(fallecidos),
                     recuperados=int(recuperados),
                 )
+                _obtener_registros_cached.clear()
                 st.success(f"Registro guardado para {fecha_sel.strftime('%d/%m/%Y')}")
                 if gps_lat and gps_lon:
                     st.query_params.clear()
@@ -624,6 +625,7 @@ def seccion_lateral_carga_masiva(usuario_id: str, brote: dict):
 
             with st.spinner("Importando..."):
                 resultado = db.importar_registros_masivo(usuario_id, brote_id, filas, catalogo_usuario_id=catalogo_id)
+            _obtener_registros_cached.clear()
 
             st.success(f"{resultado['exitosos']} filas importadas correctamente.")
             if resultado["fallidos"]:
@@ -638,7 +640,7 @@ def seccion_lateral_editar_eliminar(usuario_id: str, brote: dict):
     catalogo_id = brote["usuario_id"]
 
     with st.expander("✏️ Editar o eliminar registros"):
-        registros = db.obtener_registros(usuario_id, brote_id=brote_id)
+        registros = _obtener_registros_cached(usuario_id, brote_id)
         if not registros:
             st.caption("No hay registros en este brote todavía.")
             return
@@ -658,6 +660,7 @@ def seccion_lateral_editar_eliminar(usuario_id: str, brote: dict):
                 st.session_state[f"editando_{r['id']}"] = not st.session_state.get(f"editando_{r['id']}", False)
             if c3.button("🗑️", key=f"del_{r['id']}", help="Eliminar este registro"):
                 db.eliminar_registro(r["id"])
+                _obtener_registros_cached.clear()
                 st.rerun()
 
             if st.session_state.get(f"editando_{r['id']}"):
@@ -678,6 +681,7 @@ def seccion_lateral_editar_eliminar(usuario_id: str, brote: dict):
                         r["id"], fecha=nueva_fecha.isoformat(), via_contagio_id=nombres_vias.get(nueva_via),
                         casos_nuevos=int(nuevos_casos), fallecidos=int(nuevos_fallecidos), recuperados=int(nuevos_recuperados),
                     )
+                    _obtener_registros_cached.clear()
                     st.session_state[f"editando_{r['id']}"] = False
                     st.success("Registro actualizado.")
                     st.rerun()
@@ -805,6 +809,76 @@ def seccion_lateral_admin(usuario_id: str):
                     "Hay pagos sin coincidencia automática (correo distinto al de la cuenta) — actívalos "
                     "manualmente arriba, en la lista de usuarios, buscando su cuenta por correo."
                 )
+
+        st.divider()
+        st.markdown("**🩺 Diagnóstico del sistema**")
+        st.caption("Corre una batería de chequeos en vivo — base de datos, cálculos, y proveedor de IA — para detectar problemas sin depender de que un usuario los reporte primero.")
+        if st.button("Ejecutar diagnóstico"):
+            resultados = []
+
+            try:
+                db.obtener_perfil(usuario_id)
+                resultados.append(("✅", "Conexión a la base de datos", "OK"))
+            except Exception as e:
+                resultados.append(("❌", "Conexión a la base de datos", str(e)))
+
+            try:
+                db.estadisticas_globales_admin()
+                resultados.append(("✅", "Funciones RPC de administrador", "OK"))
+            except Exception as e:
+                resultados.append(("❌", "Funciones RPC de administrador", str(e)))
+
+            try:
+                from datetime import date, timedelta
+                registros_prueba = [
+                    {"fecha": (date.today() - timedelta(days=i)).isoformat(), "casos_nuevos": 5 + i, "fallecidos": 1, "recuperados": 2}
+                    for i in range(10, 0, -1)
+                ]
+                serie_prueba = calculos.recalcular_serie(registros_prueba)
+                assert len(serie_prueba) == 10 and "casos_activos" in serie_prueba[0]
+                velocidad_prueba = calculos.tasa_crecimiento_y_duplicacion(serie_prueba)
+                assert "tasa_r" in velocidad_prueba
+                tasas_prueba = calculos.calcular_tasas_letalidad_recuperacion(serie_prueba)
+                assert tasas_prueba["tasa_letalidad_actual"] is not None
+                resultados.append(("✅", "Cálculos base (series, tasas)", "OK"))
+            except Exception as e:
+                resultados.append(("❌", "Cálculos base (series, tasas)", str(e)))
+
+            try:
+                r1 = proyecciones.proyectar_regresion_log_lineal(serie_prueba, dias_futuros=3)
+                assert r1["valido"]
+                resultados.append(("✅", "Modelo de proyección (regresión log-lineal)", "OK"))
+            except Exception as e:
+                resultados.append(("❌", "Modelo de proyección (regresión log-lineal)", str(e)))
+
+            try:
+                grupos_prueba = clusters.detectar_clusters(
+                    [{"id": 1, "latitud": 3.45, "longitud": -76.53}, {"id": 2, "latitud": 4.71, "longitud": -74.07}],
+                    radio_km=15,
+                )
+                assert len(grupos_prueba) == 2
+                resultados.append(("✅", "Detección de clusters geográficos", "OK"))
+            except Exception as e:
+                resultados.append(("❌", "Detección de clusters geográficos", str(e)))
+
+            try:
+                proveedor = db.obtener_configuracion("PROVEEDOR_IA_ACTIVO") or "anthropic"
+                clave = db.obtener_configuracion(f"{proveedor.upper()}_API_KEY")
+                if clave:
+                    resultados.append(("✅", f"Proveedor de IA ({proveedor})", "Clave configurada"))
+                else:
+                    resultados.append(("⚠️", f"Proveedor de IA ({proveedor})", "Sin clave configurada — las funciones PRO de IA no funcionarán"))
+            except Exception as e:
+                resultados.append(("❌", "Proveedor de IA", str(e)))
+
+            for icono, nombre, detalle in resultados:
+                st.markdown(f"{icono} **{nombre}** — {detalle}")
+
+            fallos = [r for r in resultados if r[0] == "❌"]
+            if fallos:
+                st.error(f"{len(fallos)} chequeo(s) fallaron — revisa el detalle arriba.")
+            else:
+                st.success("Todos los chequeos pasaron correctamente.")
 
 
 def seccion_canales_endemicos(usuario_id: str):
@@ -1094,6 +1168,24 @@ def _obtener_proveedor_y_clave_ia() -> tuple:
     return proveedor, api_key
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _obtener_registros_cached(usuario_id: str, brote_id: int) -> list:
+    """Cachea la lectura de registros por 2 minutos — evita repetir la
+    misma consulta (y los cálculos pesados que dependen de ella) en
+    cada interacción de la página. Se invalida al instante con
+    `_obtener_registros_cached.clear()` justo después de cualquier
+    escritura (capturar/editar/eliminar/importar), para que un cambio
+    reciente siempre se vea reflejado de inmediato."""
+    return db.obtener_registros(usuario_id, brote_id=brote_id)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _detectar_clusters_cached(ubicaciones: list, radio_km: float):
+    """La detección de clusters es O(n²) — con muchas ubicaciones únicas
+    conviene no recalcularla en cada interacción de la página."""
+    return clusters.detectar_clusters(ubicaciones, radio_km=radio_km)
+
+
 def _ejecutar_seguro(func, *args, **kwargs):
     """Ejecuta el contenido de UNA pestaña de forma aislada: si falla,
     muestra un aviso solo ahí en vez de tumbar toda la página (y con
@@ -1320,7 +1412,7 @@ def dashboard_comparacion_vias(por_via: dict, usuario_id: str):
 
 
 def seccion_clusters(usuario_id: str, brote_id: int):
-    registros = db.obtener_registros(usuario_id, brote_id=brote_id)
+    registros = _obtener_registros_cached(usuario_id, brote_id)
 
     ubicaciones_map = {}
     for r in registros:
@@ -1341,7 +1433,7 @@ def seccion_clusters(usuario_id: str, brote_id: int):
         "velocidad de transmisión y casos totales de forma independiente para cada foco."
     )
     radio = st.slider("Radio de agrupación (km)", min_value=1, max_value=150, value=15, key="radio_cluster")
-    grupos = clusters.detectar_clusters(ubicaciones, radio_km=radio)
+    grupos = _detectar_clusters_cached(ubicaciones, radio_km=radio)
 
     if len(grupos) <= 1:
         st.caption("Con este radio, todas las ubicaciones caen en un solo cluster — prueba un radio más pequeño para separar focos distintos.")
@@ -1653,7 +1745,7 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
         _mostrar_aviso_ia_pro()
         return
 
-    registros = db.obtener_registros(usuario_id, brote_id=brote_id)
+    registros = _obtener_registros_cached(usuario_id, brote_id)
     ubicaciones_agregadas = calculos.agregar_casos_por_ubicacion(registros)
     if not ubicaciones_agregadas:
         return
@@ -1710,7 +1802,7 @@ def seccion_comparar_brotes(usuario_id: str, brote_actual_id: int):
             colores = [COLOR_AZUL_OSCURO, COLOR_VIOLETA, COLOR_CIAN, COLOR_AZUL_COMPLEMENTARIO, "green", "orange"]
             for i, nombre in enumerate(seleccionados):
                 b = etiquetas[nombre]
-                registros_b = db.obtener_registros(usuario_id, brote_id=b["id"])
+                registros_b = _obtener_registros_cached(usuario_id, b["id"])
                 if not registros_b:
                     continue
                 serie_b = calculos.recalcular_serie(registros_b)
@@ -1946,7 +2038,7 @@ def seccion_analisis_ia_brote(usuario_id: str, brote: dict, serie: list, velocid
         texto_vias = "; ".join(f"{c['via']}: {c['casos_activos_actuales']} casos activos, r={c['tasa_r']}" for c in comparacion)
         partes.append(f"Comparación entre vías: {texto_vias}.")
 
-    registros_brote = db.obtener_registros(usuario_id, brote_id=brote["id"])
+    registros_brote = _obtener_registros_cached(usuario_id, brote["id"])
     ubicaciones_map = {}
     for r in registros_brote:
         uid = r.get("ubicacion_id")
@@ -1955,7 +2047,7 @@ def seccion_analisis_ia_brote(usuario_id: str, brote: dict, serie: list, velocid
             etiqueta = ubic.get("ciudad") or ubic.get("departamento") or ubic.get("pais") or "Sin nombre"
             ubicaciones_map[uid] = {"id": uid, "etiqueta": etiqueta, "latitud": ubic["latitud"], "longitud": ubic["longitud"]}
     if len(ubicaciones_map) >= 2:
-        grupos = clusters.detectar_clusters(list(ubicaciones_map.values()), radio_km=15)
+        grupos = _detectar_clusters_cached(list(ubicaciones_map.values()), radio_km=15)
         texto_clusters = "; ".join(f"{clusters.etiquetar_cluster(g)} ({len(g)} ubicaciones)" for g in grupos)
         partes.append(f"Clusters geográficos detectados: {texto_clusters}.")
 
@@ -2005,9 +2097,21 @@ def app_principal():
     if brote.get("descripcion"):
         st.caption(brote["descripcion"])
 
-    registros = db.obtener_registros(usuario["id"], brote_id=brote["id"])
+    registros = _obtener_registros_cached(usuario["id"], brote["id"])
     if not registros:
-        st.info("Este brote todavía no tiene registros. Usa el panel de la izquierda para capturar el primero.")
+        st.markdown("## 👋 ¡Bienvenido a EpiScan!")
+        st.markdown(f"Tu brote **{brote['nombre']}** está listo, solo falta cargar los primeros datos.")
+        col_paso1, col_paso2, col_paso3 = st.columns(3)
+        with col_paso1:
+            st.markdown("**1️⃣ Registra un caso**")
+            st.caption("En la barra lateral izquierda, abre '✍️ Registrar un caso' y completa fecha, vía y número de casos.")
+        with col_paso2:
+            st.markdown("**2️⃣ ¿Tienes muchos datos?**")
+            st.caption("Usa '📤 Cargar datos desde Excel/CSV' en la barra lateral para importar todo de una vez.")
+        with col_paso3:
+            st.markdown("**3️⃣ Explora el dashboard**")
+            st.caption("En cuanto tengas al menos un registro, aquí aparecerán gráficos, proyecciones y más.")
+        st.caption("¿Dudas? Abre '❓ Cómo usar esta app' arriba en la barra lateral, o usa el botón 🆘 Soporte.")
         return
 
     por_via = calculos.recalcular_por_via(registros)
