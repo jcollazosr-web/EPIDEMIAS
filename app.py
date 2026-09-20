@@ -255,7 +255,7 @@ def pantalla_login():
 # BARRA LATERAL — todo lo que es entrada/control de datos
 # =======================================================================
 def barra_lateral_sesion(usuario: dict):
-    st.image(RUTA_LOGO_ICONO, use_container_width=True)
+    st.image(RUTA_LOGO_ICONO, width=180)
     st.markdown(f"**Sesión:** {usuario['email']}")
 
     with st.expander("❓ Cómo usar esta app"):
@@ -1005,6 +1005,13 @@ def dashboard_kpis(serie: list, velocidad: dict, fase: dict):
     c3.metric("Tasa de crecimiento (r)", f"{velocidad['tasa_r']:.3f}" if velocidad["tasa_r"] is not None else "N/D")
     c4.metric("Fase estimada", f"{fase['color']} {fase['fase']}")
 
+    tasas = calculos.calcular_tasas_letalidad_recuperacion(serie)
+    c5, c6 = st.columns(2)
+    letalidad_txt = f"{tasas['tasa_letalidad_actual']:.1%}" if tasas["tasa_letalidad_actual"] is not None else "N/D"
+    recuperacion_txt = f"{tasas['tasa_recuperacion_actual']:.1%}" if tasas["tasa_recuperacion_actual"] is not None else "N/D"
+    _mostrar_metrica_con_sparkline(c5, "Tasa de letalidad (acumulada)", letalidad_txt, tasas["serie_letalidad"][-14:], "red", key="letalidad")
+    _mostrar_metrica_con_sparkline(c6, "Tasa de recuperación (acumulada)", recuperacion_txt, tasas["serie_recuperacion"][-14:], "green", key="recuperacion")
+
 
 def _aplicar_interactividad_tiempo(fig):
     """Barra de desplazamiento simple y delgada debajo del gráfico, para
@@ -1256,13 +1263,17 @@ def dashboard_comparacion_vias(por_via: dict, usuario_id: str):
     st.dataframe(
         df_comp.rename(columns={
             "via": "Vía", "tasa_r": "Tasa de crecimiento", "dias_duplicacion": "Días para duplicar",
-            "casos_activos_actuales": "Casos activos",
+            "casos_activos_actuales": "Casos activos", "tasa_letalidad": "Tasa de letalidad",
+            "tasa_recuperacion": "Tasa de recuperación",
         }).round(3),
         use_container_width=True, hide_index=True,
     )
 
     mas_rapida = df_comp.iloc[0]
-    resumen = f"Vía con mayor velocidad de crecimiento: {mas_rapida['via']} (tasa r = {mas_rapida['tasa_r']:.3f}). Comparación completa: {df_comp.to_dict('records')}"
+    resumen = (
+        f"Vía con mayor velocidad de crecimiento: {mas_rapida['via']} (tasa r = {mas_rapida['tasa_r']:.3f}). "
+        f"Comparación completa (incluye tasa de letalidad y recuperación por vía): {df_comp.to_dict('records')}"
+    )
     _boton_analisis_descriptivo("Velocidad de transmisión por vía", resumen, key="vias", usuario_id=usuario_id)
 
 
@@ -1299,12 +1310,15 @@ def seccion_clusters(usuario_id: str, brote_id: int):
         regs_g = [r for r in registros if r.get("ubicacion_id") in ids_g]
         serie_g = calculos.recalcular_serie(regs_g)
         vel_g = calculos.tasa_crecimiento_y_duplicacion(serie_g)
+        tasas_g = calculos.calcular_tasas_letalidad_recuperacion(serie_g)
         filas_resumen.append({
             "Cluster": f"Cluster {i + 1}",
             "Ubicaciones": clusters.etiquetar_cluster(g),
             "Casos totales": sum(r["casos_nuevos"] for r in regs_g),
             "Tasa de crecimiento (r)": round(vel_g["tasa_r"], 3) if vel_g["tasa_r"] is not None else None,
             "Días para duplicar": round(vel_g["dias_duplicacion"], 1) if vel_g["dias_duplicacion"] is not None else None,
+            "Tasa de letalidad": round(tasas_g["tasa_letalidad_actual"], 3) if tasas_g["tasa_letalidad_actual"] is not None else None,
+            "Tasa de recuperación": round(tasas_g["tasa_recuperacion_actual"], 3) if tasas_g["tasa_recuperacion_actual"] is not None else None,
         })
 
     st.dataframe(pd.DataFrame(filas_resumen), use_container_width=True, hide_index=True)
@@ -1314,15 +1328,18 @@ def seccion_clusters(usuario_id: str, brote_id: int):
     idx = etiquetas_grupos.index(cluster_sel)
     fila_sel = filas_resumen[idx]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Casos totales", fila_sel["Casos totales"])
     c2.metric("Tasa de crecimiento (r)", fila_sel["Tasa de crecimiento (r)"] if fila_sel["Tasa de crecimiento (r)"] is not None else "N/D")
     c3.metric("Días para duplicar", fila_sel["Días para duplicar"] if fila_sel["Días para duplicar"] is not None else "N/D")
+    c4.metric("Tasa de letalidad", f"{fila_sel['Tasa de letalidad']:.1%}" if fila_sel["Tasa de letalidad"] is not None else "N/D")
+    c5.metric("Tasa de recuperación", f"{fila_sel['Tasa de recuperación']:.1%}" if fila_sel["Tasa de recuperación"] is not None else "N/D")
     st.caption(f"Ubicaciones en este cluster: {fila_sel['Ubicaciones']}")
 
     resumen_ia = "; ".join(
         f"{f['Cluster']} ({f['Ubicaciones']}): {f['Casos totales']} casos totales, "
-        f"tasa de crecimiento r={f['Tasa de crecimiento (r)']}"
+        f"tasa de crecimiento r={f['Tasa de crecimiento (r)']}, tasa de letalidad={f['Tasa de letalidad']}, "
+        f"tasa de recuperación={f['Tasa de recuperación']}"
         for f in filas_resumen
     )
     _boton_analisis_descriptivo("Clusters geográficos del brote", resumen_ia, key="clusters", usuario_id=usuario_id)

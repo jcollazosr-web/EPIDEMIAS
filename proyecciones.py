@@ -18,6 +18,7 @@ from datetime import timedelta
 
 import numpy as np
 
+import calculos
 from clasificacion import obtener_perfil_r0
 
 
@@ -284,15 +285,9 @@ def ajustar_arima(serie: list[dict], dias_futuros: int = 7, orden: tuple = (1, 1
 # pueden reutilizar esta misma función.
 # -----------------------------------------------------------------------
 def calcular_tasas_historicas(serie: list[dict]) -> tuple[float, float]:
-    total_nuevos = sum(r["casos_nuevos"] for r in serie)
-    total_fallecidos = sum(r["fallecidos"] for r in serie)
-    total_recuperados = sum(r["recuperados"] for r in serie)
-
-    if total_nuevos == 0:
-        return 0.0, 0.0
-
-    tasa_letalidad = total_fallecidos / total_nuevos
-    tasa_recuperacion = total_recuperados / total_nuevos
+    resultado = calculos.calcular_tasas_letalidad_recuperacion(serie)
+    tasa_letalidad = resultado["tasa_letalidad_actual"] or 0.0
+    tasa_recuperacion = resultado["tasa_recuperacion_actual"] or 0.0
 
     # Deja al menos un 5% de margen para que la identidad contable
     # (activos = nuevos - fallecidos - recuperados) no se vuelva inestable.

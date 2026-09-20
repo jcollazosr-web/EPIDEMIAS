@@ -95,18 +95,22 @@ def tasa_crecimiento_y_duplicacion(serie: list[dict]) -> dict:
 
 def comparar_velocidad_por_via(por_via: dict[str, list[dict]]) -> list[dict]:
     """
-    Calcula, para cada vía (y el TOTAL), la tasa de crecimiento y los días
-    de duplicación — para poder verlas todas lado a lado y comparar cuál
-    se está expandiendo más rápido en la ventana actual.
+    Calcula, para cada vía (y el TOTAL), la tasa de crecimiento, los días
+    de duplicación, y las tasas de letalidad/recuperación — para poder
+    verlas todas lado a lado y comparar cuál se está expandiendo más
+    rápido, y cuál es más grave, en la ventana actual.
     """
     resultado = []
     for nombre_via, serie in por_via.items():
         velocidad = tasa_crecimiento_y_duplicacion(serie)
+        tasas = calcular_tasas_letalidad_recuperacion(serie)
         resultado.append({
             "via": nombre_via,
             "tasa_r": velocidad["tasa_r"],
             "dias_duplicacion": velocidad["dias_duplicacion"],
             "casos_activos_actuales": serie[-1]["casos_activos"] if serie else 0,
+            "tasa_letalidad": tasas["tasa_letalidad_actual"],
+            "tasa_recuperacion": tasas["tasa_recuperacion_actual"],
         })
     return sorted(resultado, key=lambda r: (r["tasa_r"] is None, -(r["tasa_r"] or 0)))
 
@@ -184,3 +188,33 @@ def detectar_cambios_de_fase(serie: list[dict], ventana: int = 4) -> list[dict]:
             cambios.append({"fecha": serie[i]["fecha"], "fase": fase})
         anterior = fase
     return cambios
+
+
+def calcular_tasas_letalidad_recuperacion(serie: list[dict]) -> dict:
+    """
+    Tasa de letalidad (fallecidos/casos totales) y de recuperación
+    (recuperados/casos totales), ACUMULADAS día a día — para poder
+    graficar su tendencia (sparkline) además de mostrar el valor actual
+    como KPI puntual. Reutilizable por vía o por cluster, igual que la
+    tasa de crecimiento: solo se le pasa la serie ya filtrada.
+    """
+    if not serie:
+        return {"tasa_letalidad_actual": None, "tasa_recuperacion_actual": None, "serie_letalidad": [], "serie_recuperacion": []}
+
+    serie_letalidad = []
+    serie_recuperacion = []
+    for r in serie:
+        acumulados = r.get("casos_acumulados", 0)
+        if acumulados > 0:
+            serie_letalidad.append(r["fallecidos_acumulados"] / acumulados)
+            serie_recuperacion.append(r["recuperados_acumulados"] / acumulados)
+        else:
+            serie_letalidad.append(0.0)
+            serie_recuperacion.append(0.0)
+
+    return {
+        "tasa_letalidad_actual": serie_letalidad[-1],
+        "tasa_recuperacion_actual": serie_recuperacion[-1],
+        "serie_letalidad": serie_letalidad,
+        "serie_recuperacion": serie_recuperacion,
+    }

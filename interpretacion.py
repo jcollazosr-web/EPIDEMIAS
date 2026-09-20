@@ -70,6 +70,21 @@ def _llamar_ia(prompt: str, api_key: str, proveedor: str, max_tokens: int = 500)
         return respuesta.text
 
 
+def _mensaje_error_amigable(e: Exception) -> str:
+    """Traduce errores comunes de los proveedores de IA a un mensaje
+    claro para el usuario, en vez de mostrar el texto técnico crudo."""
+    texto = str(e)
+    if "503" in texto or "UNAVAILABLE" in texto or "overloaded" in texto.lower():
+        return "El proveedor de IA está temporalmente saturado por alta demanda. Intenta de nuevo en un momento."
+    if "429" in texto or "rate limit" in texto.lower() or "quota" in texto.lower():
+        return "Se alcanzó el límite de uso del proveedor de IA por ahora. Intenta más tarde, o el administrador puede revisar su plan con el proveedor."
+    if "401" in texto or "authentication" in texto.lower() or "invalid api key" in texto.lower() or "invalid x-api-key" in texto.lower():
+        return "La clave de este proveedor de IA parece inválida o venció. El administrador debe revisarla en el menú 🔑 Administrador."
+    if "404" in texto or "not found" in texto.lower() or "does not exist" in texto.lower():
+        return "El modelo configurado para este proveedor ya no está disponible. El administrador debe actualizarlo."
+    return texto
+
+
 def generar_interpretacion(resumen: dict, api_key: str, proveedor: str = "anthropic") -> dict:
     """
     `resumen` trae los números YA CALCULADOS por la app (no se le pide a
@@ -104,7 +119,7 @@ Escribe 3-4 frases explicando qué significa esto en términos prácticos para a
     except ImportError as e:
         return {"valido": False, "mensaje": f"Falta instalar la librería del proveedor {proveedor}: {e}"}
     except Exception as e:
-        return {"valido": False, "mensaje": f"No se pudo generar la interpretación: {e}"}
+        return {"valido": False, "mensaje": f"No se pudo generar la interpretación: {_mensaje_error_amigable(e)}"}
 
 
 def generar_analisis_descriptivo(titulo_grafico: str, resumen_datos: str, api_key: str, proveedor: str = "anthropic") -> dict:
@@ -133,7 +148,7 @@ Escribe un análisis descriptivo breve (3-5 frases) de lo que muestra este gráf
     except ImportError as e:
         return {"valido": False, "mensaje": f"Falta instalar la librería del proveedor {proveedor}: {e}"}
     except Exception as e:
-        return {"valido": False, "mensaje": f"No se pudo generar el análisis: {e}"}
+        return {"valido": False, "mensaje": f"No se pudo generar el análisis: {_mensaje_error_amigable(e)}"}
 
 
 def generar_analisis_completo(datos_texto: str, api_key: str, proveedor: str = "anthropic") -> dict:
@@ -172,4 +187,4 @@ Sé breve en cada sección (2-3 frases máximo). Si algún dato no está disponi
     except ImportError as e:
         return {"valido": False, "mensaje": f"Falta instalar la librería del proveedor {proveedor}: {e}"}
     except Exception as e:
-        return {"valido": False, "mensaje": f"No se pudo generar el análisis: {e}"}
+        return {"valido": False, "mensaje": f"No se pudo generar el análisis: {_mensaje_error_amigable(e)}"}
