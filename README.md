@@ -318,6 +318,23 @@ o ubicación) sigue restringida al dueño del catálogo.
 - **Pantalla de bienvenida** para brotes recién creados sin registros
   todavía: 3 pasos claros en vez de un solo mensaje genérico.
 
+- **Bug real corregido**: `cookie_manager.delete()` lanzaba `KeyError`
+  si la cookie ya no existía, tumbando la app justo al recuperarse de
+  una sesión inconsistente. Nueva función `_borrar_cookie_segura()`
+  usada en los 6 puntos donde se borran cookies.
+- **Cierre de sesión real y completo** cuando la sesión queda
+  inconsistente (en vez de un intento de recuperación silenciosa).
+- **Fuentes de datos externas** ahora es función PRO.
+- **Botón de análisis con IA agregado al mapa** (antes faltaba).
+- **Segundo método para estimar infectados no diagnosticados**: por
+  positividad de la prueba diagnóstica (fórmula de covid19-projections.com,
+  `multiplicador = 16·√positividad + 2.5`), como alternativa al método
+  SIR existente — ahora en pestañas dentro de la misma sección, movida
+  fuera de "Avanzado" a su propia pestaña "🔬 Subregistro", junto a
+  "Por vía de contagio".
+- **Comparación Gratis/PRO del login actualizada** con los cambios de
+  este lote.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

@@ -365,6 +365,48 @@ def descomponer_proyeccion_desde_nuevos(serie: list[dict], nuevos_futuros: list[
 # como orden de magnitud orientativo, NO como conteo preciso en tiempo
 # real. Se documenta así explícitamente en el mensaje de resultado.
 # -----------------------------------------------------------------------
+def estimar_infectados_por_positividad(casos_activos: int, positividad_prueba: float) -> dict:
+    """
+    Método alternativo/complementario al de tamaño final SIR: estima el
+    subregistro a partir de la POSITIVIDAD de la prueba diagnóstica
+    (% de pruebas que salen positivas), sin necesitar conocer R0 ni el
+    tamaño de la población.
+
+    Fórmula: multiplicador = 16 * sqrt(positividad) + 2.5
+    (Fuente: covid19-projections.com — "Estimating True Infections",
+    Youyang Gu, calibrada originalmente con datos de COVID-19 en EE.UU.
+    Es una heurística de calibración empírica, NO una ley epidemiológica
+    universal — trátala como un orden de magnitud orientativo, más útil
+    cuanto más alta sea la positividad; con positividad muy baja
+    [<2%] el multiplicador ronda 3-4, reflejando que la mayoría de
+    infectados síntomáticos ya se están detectando).
+
+    `positividad_prueba` va de 0 a 1 (ej. 0.15 para 15%).
+    """
+    if not (0 <= positividad_prueba <= 1):
+        return {"valido": False, "mensaje": "La positividad debe estar entre 0% y 100%."}
+    if casos_activos < 0:
+        return {"valido": False, "mensaje": "Los casos activos no pueden ser negativos."}
+
+    multiplicador = 16 * math.sqrt(positividad_prueba) + 2.5
+    infectados_totales_estimados = casos_activos * multiplicador
+    no_diagnosticados = max(0.0, infectados_totales_estimados - casos_activos)
+
+    return {
+        "valido": True,
+        "multiplicador": multiplicador,
+        "infectados_totales_estimados": infectados_totales_estimados,
+        "casos_activos": casos_activos,
+        "no_diagnosticados_estimados": no_diagnosticados,
+        "mensaje": (
+            f"Con {positividad_prueba:.0%} de positividad, se estima que por cada caso diagnosticado hay "
+            f"~{multiplicador:.1f} infectados reales. Heurística calibrada originalmente con datos de "
+            "COVID-19 (covid19-projections.com) — trátalo como un orden de magnitud, no una cifra exacta, "
+            "y con más razón si tu enfermedad no es COVID-19."
+        ),
+    }
+
+
 def estimar_infectados_no_diagnosticados(
     r0: float, poblacion_total: int, poblacion_susceptible: int, casos_diagnosticados_acumulados: int
 ) -> dict:

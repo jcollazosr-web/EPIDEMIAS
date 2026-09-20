@@ -118,6 +118,16 @@ st.markdown(
 # Cookies (persistencia de sesión entre refrescos del navegador)
 # ---------------------------------------------------------------------
 cookie_manager = stx.CookieManager()
+
+
+def _borrar_cookie_segura(nombre: str, key: str):
+    """cookie_manager.delete() lanza KeyError si la cookie ya no existe
+    en su diccionario interno (ej. si ya se borró antes, o nunca se
+    llegó a fijar) — esto no debería tumbar la app."""
+    try:
+        cookie_manager.delete(nombre, key=key)
+    except KeyError:
+        pass
 _cookies_actuales = cookie_manager.get_all() or {}
 
 
@@ -146,8 +156,8 @@ def _restaurar_sesion_desde_cookie():
             if user and user.user:
                 st.session_state["usuario"] = {"id": user.user.id, "email": user.user.email}
         except Exception:
-            cookie_manager.delete("access_token", key="del_access_token_expirado")
-            cookie_manager.delete("refresh_token", key="del_refresh_token_expirado")
+            _borrar_cookie_segura("access_token", key="del_access_token_expirado")
+            _borrar_cookie_segura("refresh_token", key="del_refresh_token_expirado")
             st.session_state.pop("_supabase_client", None)
 
 
@@ -197,6 +207,7 @@ def pantalla_login():
                 "- Activos, recuperados y fallecidos\n"
                 "- Clusters geográficos automáticos\n"
                 "- Comparación por vía de contagio\n"
+                "- Estimar infectados no diagnosticados\n"
                 "- Proyecciones (regresión, logístico, ARIMA)\n"
                 "- Comparar brotes, historial, exportar PDF/Excel"
             )
@@ -206,7 +217,8 @@ def pantalla_login():
                 "- Todo lo del plan Gratis, más:\n"
                 "- 🗺️ Mapa geográfico de casos\n"
                 "- 🤖 Análisis del brote con Inteligencia Artificial\n"
-                "- 📈 Canales Endémicos (comparación histórica por semana epidemiológica)"
+                "- 📈 Canales Endémicos (comparación histórica por semana epidemiológica)\n"
+                "- 🌐 Conexión a fuentes de datos externas (Socrata, APIs)"
             )
 
     st.write("")
@@ -309,8 +321,8 @@ def barra_lateral_sesion(usuario: dict):
 
     if st.button("Cerrar sesión"):
         db.cerrar_sesion()
-        cookie_manager.delete("access_token", key="del_access_token_logout")
-        cookie_manager.delete("refresh_token", key="del_refresh_token_logout")
+        _borrar_cookie_segura("access_token", key="del_access_token_logout")
+        _borrar_cookie_segura("refresh_token", key="del_refresh_token_logout")
         del st.session_state["usuario"]
         st.session_state.pop("_supabase_client", None)
         st.session_state["_acabamos_de_cerrar_sesion"] = True
@@ -331,8 +343,8 @@ def seccion_lateral_brotes(usuario_id: str) -> dict:
         # recuperar sola.
         st.error("Tu sesión ya no es válida. Cerrando sesión...")
         db.cerrar_sesion()
-        cookie_manager.delete("access_token", key="del_access_token_recuperacion")
-        cookie_manager.delete("refresh_token", key="del_refresh_token_recuperacion")
+        _borrar_cookie_segura("access_token", key="del_access_token_recuperacion")
+        _borrar_cookie_segura("refresh_token", key="del_refresh_token_recuperacion")
         st.session_state.pop("usuario", None)
         st.session_state.pop("_supabase_client", None)
         st.session_state["_acabamos_de_cerrar_sesion"] = True
@@ -1784,6 +1796,13 @@ def dashboard_mapa(usuario_id: str, brote_id: int):
     except ImportError:
         st.map(df_mapa.rename(columns={"latitud": "lat", "longitud": "lon"})[["lat", "lon"]])
 
+    df_top = df_mapa.sort_values("casos_totales", ascending=False).head(5)
+    resumen = "; ".join(
+        f"{fila['etiqueta_completa']}: {fila['casos_totales']} casos totales, {fila['fallecidos_totales']} fallecidos"
+        for _, fila in df_top.iterrows()
+    )
+    _boton_analisis_descriptivo("Mapa de casos", resumen, key="mapa", usuario_id=usuario_id)
+
 
 def seccion_comparar_brotes(usuario_id: str, brote_actual_id: int):
     todos_los_brotes = db.listar_brotes(usuario_id)
@@ -1843,7 +1862,12 @@ def seccion_historial_cambios(brote_id: int):
 
 
 def seccion_subregistro(serie: list, tipo_via_actual: str = None):
-    with st.expander("🔬 Estimar infectados no diagnosticados"):
+    st.markdown("### 🔬 Estimar infectados no diagnosticados")
+    st.caption("Dos métodos independientes para estimar el subregistro — úsalos según qué datos tengas a mano.")
+
+    metodo_sir, metodo_positividad = st.tabs(["Por R0 (modelo SIR)", "Por positividad de la prueba"])
+
+    with metodo_sir:
         st.caption(
             "Usa la relación de tamaño final de un modelo SIR cerrado para estimar, de forma "
             "orientativa, cuántas infecciones totales (diagnosticadas + no diagnosticadas) "
@@ -1866,7 +1890,7 @@ def seccion_subregistro(serie: list, tipo_via_actual: str = None):
         poblacion_susceptible = c1.number_input("Población susceptible (sin inmunidad)", min_value=1, value=int(poblacion_total * 0.9), step=1000)
         casos_diagnosticados = c2.number_input("Casos diagnosticados acumulados", min_value=0, value=int(casos_diagnosticados_default), step=1)
 
-        if st.button("Calcular estimación"):
+        if st.button("Calcular estimación", key="btn_sir"):
             resultado = proyecciones.estimar_infectados_no_diagnosticados(r0, int(poblacion_total), int(poblacion_susceptible), int(casos_diagnosticados))
             if not resultado["valido"]:
                 st.warning(resultado["mensaje"])
@@ -1877,6 +1901,30 @@ def seccion_subregistro(serie: list, tipo_via_actual: str = None):
                 cc2.metric("No diagnosticados estimados", f"{resultado['no_diagnosticados_estimados']:.0f}")
                 tasa = resultado["tasa_deteccion_estimada"]
                 cc3.metric("Tasa de detección estimada", f"{tasa*100:.1f}%" if tasa is not None else "N/D")
+
+    with metodo_positividad:
+        st.caption(
+            "Usa el % de positividad de la prueba diagnóstica (de todas las pruebas hechas, cuántas "
+            "salen positivas) para estimar el subregistro — no necesita conocer R0 ni el tamaño de la "
+            "población. A mayor positividad, más señales de que hay infectados sin detectar."
+        )
+        ultimo = serie[-1] if serie else {}
+        casos_activos_default = int(ultimo.get("casos_activos", 0))
+
+        cp1, cp2 = st.columns(2)
+        casos_activos_pos = cp1.number_input("Casos activos diagnosticados", min_value=0, value=casos_activos_default, step=1, key="casos_activos_positividad")
+        positividad_pct = cp2.number_input("Positividad de la prueba (%)", min_value=0.0, max_value=100.0, value=10.0, step=0.5, key="positividad_prueba")
+
+        if st.button("Calcular estimación", key="btn_positividad"):
+            resultado = proyecciones.estimar_infectados_por_positividad(casos_activos_pos, positividad_pct / 100)
+            if not resultado["valido"]:
+                st.warning(resultado["mensaje"])
+            else:
+                st.caption(resultado["mensaje"])
+                cc1, cc2, cc3 = st.columns(3)
+                cc1.metric("Infectados totales estimados", f"{resultado['infectados_totales_estimados']:.0f}")
+                cc2.metric("No diagnosticados estimados", f"{resultado['no_diagnosticados_estimados']:.0f}")
+                cc3.metric("Multiplicador estimado", f"×{resultado['multiplicador']:.1f}")
 
 
 def seccion_chatbot_interpretacion(usuario_id: str, serie: list, velocidad: dict, fase: dict, brote_nombre: str, vista: str):
@@ -1924,6 +1972,9 @@ def seccion_chatbot_interpretacion(usuario_id: str, serie: list, velocidad: dict
 
 def seccion_fuentes_externas(usuario_id: str, brote_id: int, serie: list):
     with st.expander("🌐 Fuentes de datos externas"):
+        if not db.tiene_ia_habilitada(usuario_id):
+            _mostrar_aviso_ia_pro()
+            return
         st.caption(
             "Conecta datasets públicos (Socrata: cientos de portales gubernamentales en el mundo, "
             "incluido datos.gov.co) o cualquier API REST que devuelva JSON, para comparar contra tus "
@@ -2139,9 +2190,9 @@ def app_principal():
     dashboard_kpis(serie, velocidad, fase)
     seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
 
-    tab_resumen, tab_componentes, tab_clusters, tab_geografia, tab_vias, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
+    tab_resumen, tab_componentes, tab_clusters, tab_geografia, tab_vias, tab_subregistro, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
         ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🧭 Clusters automáticos", "🗺️ Geografía",
-         "🦠 Por vía de contagio", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
+         "🦠 Por vía de contagio", "🔬 Subregistro", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
     )
 
     with tab_resumen:
@@ -2161,6 +2212,9 @@ def app_principal():
         _ejecutar_seguro(dashboard_comparacion_vias, por_via, usuario_id=usuario["id"])
         _ejecutar_seguro(dashboard_tabla_y_export, serie, vista_sel)
 
+    with tab_subregistro:
+        _ejecutar_seguro(seccion_subregistro, serie, tipo_via_actual)
+
     with tab_proyecciones:
         _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], tipo_via_actual)
 
@@ -2173,7 +2227,6 @@ def app_principal():
     with tab_avanzado:
         _ejecutar_seguro(seccion_comparar_brotes, usuario["id"], brote["id"])
         _ejecutar_seguro(seccion_historial_cambios, brote["id"])
-        _ejecutar_seguro(seccion_subregistro, serie, tipo_via_actual)
         _ejecutar_seguro(seccion_fuentes_externas, usuario["id"], brote["id"], serie)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
