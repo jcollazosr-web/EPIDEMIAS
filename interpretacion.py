@@ -13,7 +13,10 @@ la interfaz antes de invocarlo.
 PROVEEDORES = {
     "anthropic": {"etiqueta": "Anthropic (Claude)", "modelo_defecto": "claude-sonnet-5"},
     "openai": {"etiqueta": "OpenAI (GPT)", "modelo_defecto": "gpt-4o-mini"},
-    "google": {"etiqueta": "Google (Gemini)", "modelo_defecto": "gemini-2.0-flash"},
+    # Google descontinúa modelos "preview" con relativamente poco aviso
+    # (ver ai.google.dev/gemini-api/docs/models) — si este deja de
+    # funcionar, revisa esa página y actualiza 'modelo_defecto' aquí.
+    "google": {"etiqueta": "Google (Gemini)", "modelo_defecto": "gemini-3.6-flash"},
     "deepseek": {"etiqueta": "DeepSeek", "modelo_defecto": "deepseek-chat"},
     # Groq descontinúa modelos con relativamente poco aviso (ver
     # console.groq.com/docs/deprecations) — si este deja de funcionar,
@@ -59,10 +62,11 @@ def _llamar_ia(prompt: str, api_key: str, proveedor: str, max_tokens: int = 500)
         return respuesta.choices[0].message.content
 
     elif proveedor == "google":
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        cliente_modelo = genai.GenerativeModel(modelo)
-        respuesta = cliente_modelo.generate_content(prompt)
+        # Google migró de la librería 'google-generativeai' (legacy) a
+        # 'google-genai' — la anterior falla con los modelos Gemini 3.x.
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        respuesta = client.models.generate_content(model=modelo, contents=prompt)
         return respuesta.text
 
 
