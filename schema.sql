@@ -657,3 +657,74 @@ begin
 end;
 $$;
 grant execute on function admin_listar_usuarios() to authenticated;
+
+-- =========================================================================
+-- MIGRACIÓN: Suscripción PRO con seguimiento de 30 días
+-- =========================================================================
+alter table perfiles add column if not exists plan_actualizado_en timestamptz;
+
+create or replace function admin_actualizar_plan_usuario(p_usuario_id uuid, p_plan text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+    if not exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    if p_plan not in ('gratis', 'pro') then
+        raise exception 'Plan inválido: use gratis o pro';
+    end if;
+    update perfiles set plan = p_plan, plan_actualizado_en = now() where usuario_id = p_usuario_id;
+end;
+$$;
+
+drop function if exists admin_listar_usuarios();
+create or replace function admin_listar_usuarios()
+returns table(usuario_id uuid, email text, creado_en timestamptz, confirmado boolean, plan text, plan_actualizado_en timestamptz)
+language plpgsql security definer set search_path = public, auth as $$
+begin
+    if not exists (select 1 from perfiles p where p.usuario_id = auth.uid() and p.rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    return query
+    select u.id, u.email::text, u.created_at, (u.email_confirmed_at is not null), coalesce(pf.plan, 'gratis'), pf.plan_actualizado_en
+    from auth.users u
+    left join perfiles pf on pf.usuario_id = u.id
+    order by u.created_at;
+end;
+$$;
+grant execute on function admin_listar_usuarios() to authenticated;
+
+-- =========================================================================
+-- MIGRACIÓN: Canales endémicos (función PRO)
+-- =========================================================================
+create table if not exists canales_endemicos (
+    id           bigint generated always as identity primary key,
+    usuario_id   uuid references auth.users(id) on delete cascade not null,
+    nombre       text not null,
+    creado_en    timestamptz default now()
+);
+alter table canales_endemicos enable row level security;
+create policy "canales_select_propio" on canales_endemicos for select using (auth.uid() = usuario_id);
+create policy "canales_insert_propio" on canales_endemicos for insert with check (auth.uid() = usuario_id);
+create policy "canales_update_propio" on canales_endemicos for update using (auth.uid() = usuario_id) with check (auth.uid() = usuario_id);
+create policy "canales_delete_propio" on canales_endemicos for delete using (auth.uid() = usuario_id);
+
+create table if not exists canal_endemico_datos (
+    id           bigint generated always as identity primary key,
+    canal_id     bigint references canales_endemicos(id) on delete cascade not null,
+    usuario_id   uuid references auth.users(id) on delete cascade not null,
+    anio         integer not null check (anio between 1900 and 2200),
+    semana       integer not null check (semana between 1 and 53),
+    casos        integer not null default 0 check (casos >= 0),
+    unique (canal_id, anio, semana)
+);
+alter table canal_endemico_datos enable row level security;
+create policy "canal_datos_select_propio" on canal_endemico_datos for select
+    using (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()));
+create policy "canal_datos_insert_propio" on canal_endemico_datos for insert
+    with check (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()));
+create policy "canal_datos_update_propio" on canal_endemico_datos for update
+    using (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()))
+    with check (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()));
+create policy "canal_datos_delete_propio" on canal_endemico_datos for delete
+    using (exists (select 1 from canales_endemicos c where c.id = canal_endemico_datos.canal_id and c.usuario_id = auth.uid()));
+create index if not exists idx_canal_datos_canal on canal_endemico_datos (canal_id);

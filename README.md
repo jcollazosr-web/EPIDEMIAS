@@ -275,6 +275,25 @@ o ubicación) sigue restringida al dueño del catálogo.
   Quien no tiene plan PRO ve el aviso "🔒 Funciones de Inteligencia
   Artificial disponibles en la versión PRO" en vez del botón de IA.
 
+- **Groq** agregado como quinto proveedor de IA (junto a Anthropic,
+  OpenAI, Google y DeepSeek) — también con API compatible con OpenAI.
+- **Suscripción PRO con seguimiento de 30 días**: se registra cuándo se
+  activó el plan PRO de cada usuario; pasados 30 días (la suscripción es
+  mensual), tanto el usuario como el admin ven un aviso de renovación.
+  Los usuarios con plan gratuito ven siempre el mensaje "Actualiza tu
+  suscripción a la versión PRO" en la barra lateral.
+- **Nuevo link de pago/suscripción**: `checkout.bold.co/payment/LNK_CMXV6OE6G7`.
+- **Canales Endémicos** (`canal_endemico.py`, función PRO): tabla editable
+  para digitar casos por semana epidemiológica a lo largo de varios años
+  (mínimo 5 recomendado), que calcula las zonas de Éxito/Seguridad/
+  Alerta/Epidemia por el método de cuartiles y compara el año actual
+  contra el histórico — con gráfico interactivo y análisis con IA.
+- **Logo de la barra lateral corregido** (ya no se recorta — ahora usa
+  ancho responsivo en vez de un ancho fijo en píxeles).
+- **Red de seguridad final contra errores sin capturar**: cualquier
+  excepción no manejada en el dashboard ahora muestra un mensaje
+  amigable con botón de recarga, en vez de un traceback crudo.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ

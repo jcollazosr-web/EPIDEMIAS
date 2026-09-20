@@ -13,6 +13,7 @@ Estructura:
 """
 import io
 import os
+import base64
 from datetime import date
 
 import pandas as pd
@@ -27,16 +28,19 @@ import clasificacion
 import reportes
 import fuentes_externas
 import interpretacion
+import canal_endemico
 import geografia
 import clusters
 import sugerencia_modelos as sm
 
-LINK_DONACION = "https://checkout.bold.co/payment/LNK_ATP7YCXF33"
+LINK_DONACION = "https://checkout.bold.co/payment/LNK_CMXV6OE6G7"
+LINK_SOPORTE_WHATSAPP = "https://wa.me/573113682907?text=Hola%2C%20necesito%20ayuda%20con%20EpiScan"
 URL_BASE_APP = "https://epidemias-jmcr.streamlit.app"
 RUTA_LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo_jmc.png")
 RUTA_LOGO_ICONO = os.path.join(os.path.dirname(__file__), "assets", "logo_icono.png")
 RUTA_LOGO_FAVICON = os.path.join(os.path.dirname(__file__), "assets", "logo_favicon.png")
 RUTA_ICONO_ROBOT = os.path.join(os.path.dirname(__file__), "assets", "robot_pensamiento.png")
+RUTA_ICONO_SOPORTE = os.path.join(os.path.dirname(__file__), "assets", "icono_soporte.png")
 
 # Colores del manual de marca (Fundación Juan Manuel Collazos)
 COLOR_AZUL_OSCURO = "#000d5c"
@@ -87,6 +91,24 @@ st.markdown(
         border-radius: 8px !important;
         box-shadow: 2px 2px 10px rgba(0,0,0,0.25);
     }}
+    .boton-soporte-flotante {{
+        position: fixed !important;
+        bottom: 24px;
+        right: 20px;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background-color: #25D366;
+        color: white !important;
+        padding: 10px 16px;
+        border-radius: 24px;
+        text-decoration: none !important;
+        font-weight: bold;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
+    }}
+    .boton-soporte-flotante:hover {{ background-color: #1ebe5b; }}
+    .boton-soporte-flotante img {{ width: 22px; height: 22px; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -135,7 +157,24 @@ _restaurar_sesion_desde_cookie()
 # ---------------------------------------------------------------------
 # Pantalla de autenticación
 # ---------------------------------------------------------------------
+def boton_flotante_soporte():
+    """Botón flotante fijo en la esquina inferior derecha, visible en
+    cualquier pantalla — enlaza directo a WhatsApp para soporte."""
+    try:
+        with open(RUTA_ICONO_SOPORTE, "rb") as f:
+            icono_b64 = base64.b64encode(f.read()).decode()
+        icono_html = f'<img src="data:image/png;base64,{icono_b64}" alt="">'
+    except FileNotFoundError:
+        icono_html = "🆘"
+
+    st.markdown(
+        f'<a class="boton-soporte-flotante" href="{LINK_SOPORTE_WHATSAPP}" target="_blank">{icono_html} Soporte</a>',
+        unsafe_allow_html=True,
+    )
+
+
 def pantalla_login():
+    boton_flotante_soporte()
     col_logo, col_titulo = st.columns([2, 3])
     with col_logo:
         st.image(RUTA_LOGO, width=260)
@@ -143,7 +182,7 @@ def pantalla_login():
         st.title("EpiScan")
         st.caption("Sistema de vigilancia epidemiológica")
     st.markdown(
-        f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💙 Apoya a la Fundación Juan Manuel Collazos — Donar</a>',
+        f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💎 Actualiza tu suscripción a la versión PRO — 20.000 COP / 6 USD mensuales</a>',
         unsafe_allow_html=True,
     )
     st.write("")
@@ -216,9 +255,7 @@ def pantalla_login():
 # BARRA LATERAL — todo lo que es entrada/control de datos
 # =======================================================================
 def barra_lateral_sesion(usuario: dict):
-    col_logo_sb, _ = st.columns([2, 1])
-    with col_logo_sb:
-        st.image(RUTA_LOGO_ICONO, width=110)
+    st.image(RUTA_LOGO_ICONO, use_container_width=True)
     st.markdown(f"**Sesión:** {usuario['email']}")
 
     with st.expander("❓ Cómo usar esta app"):
@@ -681,9 +718,22 @@ def seccion_lateral_admin(usuario_id: str):
 
         for u in usuarios:
             cu1, cu2, cu3 = st.columns([3, 1.3, 1])
-            cu1.caption(f"{u['email']} — {'✅ confirmado' if u['confirmado'] else '⏳ sin confirmar'}")
-
             plan_actual = u.get("plan", "gratis")
+
+            dias_pro = None
+            if plan_actual == "pro" and u.get("plan_actualizado_en"):
+                try:
+                    fecha_act = pd.to_datetime(u["plan_actualizado_en"], utc=True).tz_localize(None)
+                    dias_pro = (pd.Timestamp.now() - fecha_act).days
+                except Exception:
+                    dias_pro = None
+
+            estado_pro = ""
+            if plan_actual == "pro" and dias_pro is not None:
+                estado_pro = f" — ⚠️ PRO hace {dias_pro} días (renovar)" if dias_pro >= 30 else f" — PRO hace {dias_pro} días"
+
+            cu1.caption(f"{u['email']} — {'✅ confirmado' if u['confirmado'] else '⏳ sin confirmar'}{estado_pro}")
+
             nuevo_plan = cu2.selectbox(
                 "Plan", options=["gratis", "pro"], index=["gratis", "pro"].index(plan_actual),
                 key=f"plan_sel_{u['usuario_id']}", label_visibility="collapsed",
@@ -715,10 +765,188 @@ def seccion_lateral_admin(usuario_id: str):
                     st.rerun()
 
 
-def seccion_lateral_donacion():
-    st.markdown("### 💙 Apoya la Fundación")
-    st.caption("Esta app es gratuita. Si te resulta útil, considera donar a la Fundación Juan Manuel Collazos.")
-    st.markdown(f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">Donar ahora</a>', unsafe_allow_html=True)
+def seccion_canales_endemicos(usuario_id: str):
+    st.markdown("### 📈 Canales Endémicos")
+    st.caption(
+        "Herramienta clásica de vigilancia: compara los casos de la semana epidemiológica actual "
+        "contra el comportamiento histórico (varios años) para saber si estás en zona de Éxito, "
+        "Seguridad, Alerta o Epidemia. Función disponible en la versión PRO."
+    )
+
+    if not db.tiene_ia_habilitada(usuario_id):
+        _mostrar_aviso_ia_pro()
+        return
+
+    canales = db.listar_canales_endemicos(usuario_id)
+    nombres_canales = {c["nombre"]: c for c in canales}
+
+    with st.expander("+ Crear nuevo canal endémico"):
+        with st.form("form_nuevo_canal"):
+            nombre_canal = st.text_input("Nombre (ej. 'Dengue - Cali')")
+            crear_canal = st.form_submit_button("Crear")
+        if crear_canal and nombre_canal.strip():
+            db.crear_canal_endemico(usuario_id, nombre_canal)
+            st.rerun()
+
+    if not canales:
+        st.info("Crea tu primer canal endémico arriba para empezar a cargar datos históricos.")
+        return
+
+    nombre_sel = st.selectbox("Canal:", options=list(nombres_canales.keys()), key="canal_endemico_sel")
+    canal = nombres_canales[nombre_sel]
+
+    if st.button("🗑️ Eliminar este canal", key=f"del_canal_{canal['id']}"):
+        db.eliminar_canal_endemico(canal["id"])
+        st.rerun()
+
+    st.markdown("#### Datos históricos por semana epidemiológica")
+    st.caption(
+        f"Se recomiendan al menos {canal_endemico.ANIOS_MINIMOS_RECOMENDADOS} años de historia para que "
+        "los percentiles tengan sentido estadístico. Rellena la tabla y guarda."
+    )
+
+    datos_existentes = db.obtener_datos_canal(canal["id"])
+    anios_existentes = sorted(set(d["anio"] for d in datos_existentes)) if datos_existentes else []
+
+    anio_actual_calendario = date.today().year
+    c1, c2 = st.columns(2)
+    anio_inicio = c1.number_input("Año inicial", min_value=1990, max_value=2200,
+                                   value=anios_existentes[0] if anios_existentes else anio_actual_calendario - 5, step=1)
+    anio_fin = c2.number_input("Año final (el más reciente, normalmente el año en curso)", min_value=1990, max_value=2200,
+                                value=anios_existentes[-1] if anios_existentes else anio_actual_calendario, step=1)
+
+    if anio_fin < anio_inicio:
+        st.error("El año final debe ser mayor o igual al año inicial.")
+        return
+
+    anios = list(range(int(anio_inicio), int(anio_fin) + 1))
+    if len(anios) < canal_endemico.ANIOS_MINIMOS_RECOMENDADOS + 1:  # +1 porque el último año es el "actual", no histórico
+        st.warning(
+            f"Estás usando {len(anios)} años en total. Se recomiendan al menos "
+            f"{canal_endemico.ANIOS_MINIMOS_RECOMENDADOS} años HISTÓRICOS además del año actual "
+            f"(o sea, {canal_endemico.ANIOS_MINIMOS_RECOMENDADOS + 1} años en total) para un canal confiable."
+        )
+
+    # Construir la tabla editable: filas = semana 1-52, columnas = años
+    mapa_existente = {(d["anio"], d["semana"]): d["casos"] for d in datos_existentes}
+    filas_tabla = []
+    for semana in range(1, 53):
+        fila = {"Semana": semana}
+        for anio in anios:
+            fila[str(anio)] = mapa_existente.get((anio, semana), 0)
+        filas_tabla.append(fila)
+    df_editable = pd.DataFrame(filas_tabla)
+
+    df_editado = st.data_editor(
+        df_editable, use_container_width=True, hide_index=True, num_rows="fixed",
+        disabled=["Semana"], key=f"editor_canal_{canal['id']}_{anio_inicio}_{anio_fin}",
+    )
+
+    if st.button("💾 Guardar datos del canal"):
+        filas_guardar = []
+        for _, fila in df_editado.iterrows():
+            semana = int(fila["Semana"])
+            for anio in anios:
+                filas_guardar.append({"anio": anio, "semana": semana, "casos": int(fila[str(anio)])})
+        with st.spinner("Guardando..."):
+            db.guardar_datos_canal(canal["id"], usuario_id, filas_guardar)
+        st.success(f"{len(filas_guardar)} valores guardados.")
+        st.rerun()
+
+    if not datos_existentes:
+        return
+
+    st.divider()
+    st.markdown("#### El canal endémico")
+
+    anio_comparar = st.selectbox("Año a comparar contra el histórico:", options=sorted(anios, reverse=True), key="anio_comparar_canal")
+    resultado = canal_endemico.calcular_canal_endemico(datos_existentes, anio_actual=anio_comparar)
+
+    if resultado["advertencia_pocos_anios"]:
+        st.warning(
+            f"Solo hay {resultado['n_anios_historicos']} año(s) histórico(s) (sin contar {anio_comparar}) — "
+            f"se recomiendan al menos {canal_endemico.ANIOS_MINIMOS_RECOMENDADOS}. Las bandas de abajo son "
+            "poco confiables con tan pocos datos."
+        )
+
+    try:
+        import plotly.graph_objects as go
+
+        semanas = [b["semana"] for b in resultado["bandas"]]
+        p25 = [b["p25"] for b in resultado["bandas"]]
+        mediana = [b["mediana"] for b in resultado["bandas"]]
+        p75 = [b["p75"] for b in resultado["bandas"]]
+        actual = [resultado["curva_actual"].get(s) for s in semanas]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=semanas, y=p75, line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(x=semanas, y=p25, fill="tonexty", fillcolor="rgba(158,51,178,0.15)",
+                                  line=dict(width=0), name="Zona de seguridad-alerta (P25-P75)"))
+        fig.add_trace(go.Scatter(x=semanas, y=mediana, name="Mediana histórica", line=dict(color=COLOR_AZUL_OSCURO, width=2, dash="dot")))
+        fig.add_trace(go.Scatter(x=semanas, y=actual, name=f"Año {anio_comparar}", line=dict(color=COLOR_VIOLETA, width=3)))
+        fig.update_layout(height=400, xaxis_title="Semana epidemiológica", yaxis_title="Casos",
+                           margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.info("Instala 'plotly' para ver el gráfico del canal endémico.")
+
+    semanas_con_dato_actual = [s for s in semanas if resultado["curva_actual"].get(s) is not None]
+    if semanas_con_dato_actual:
+        ultima_semana = max(semanas_con_dato_actual)
+        banda_ultima = resultado["bandas"][ultima_semana - 1]
+        zona = canal_endemico.clasificar_zona(resultado["curva_actual"][ultima_semana], banda_ultima)
+        colores_zona = {"Éxito": "🟢", "Seguridad": "🟢", "Alerta": "🟠", "Epidemia": "🔴"}
+        st.metric(f"Zona en la semana {ultima_semana} de {anio_comparar}", f"{colores_zona.get(zona, '⚪')} {zona}")
+
+    resumen_ia = (
+        f"Canal endémico '{canal['nombre']}', año {anio_comparar} vs. {resultado['n_anios_historicos']} años históricos "
+        f"({', '.join(str(a) for a in resultado['anios_usados'])}). "
+        + (f"Última semana con dato ({ultima_semana}): {resultado['curva_actual'][ultima_semana]} casos, zona {zona}." if semanas_con_dato_actual else "")
+    )
+    _boton_analisis_descriptivo(f"Canal endémico — {canal['nombre']}", resumen_ia, key=f"canal_{canal['id']}", usuario_id=usuario_id)
+
+
+def seccion_lateral_suscripcion(usuario_id: str):
+    perfil = db.obtener_perfil(usuario_id)
+    plan = perfil.get("plan", "gratis")
+    es_admin_usuario = perfil.get("rol") == "admin"
+
+    dias_transcurridos = None
+    actualizado_en = perfil.get("plan_actualizado_en")
+    if actualizado_en:
+        try:
+            fecha_actualizacion = pd.to_datetime(actualizado_en, utc=True).tz_localize(None)
+            dias_transcurridos = (pd.Timestamp.now() - fecha_actualizacion).days
+        except Exception:
+            dias_transcurridos = None
+
+    st.markdown("### 💎 Suscripción PRO")
+
+    if es_admin_usuario:
+        st.caption("Tienes acceso PRO ilimitado por ser administrador.")
+    elif plan == "pro":
+        if dias_transcurridos is not None and dias_transcurridos >= 30:
+            st.warning(
+                f"⚠️ Tu suscripción PRO lleva {dias_transcurridos} días activa (se renueva cada "
+                "30 días). Realiza el pago mensual para seguir usando las funciones PRO sin interrupción."
+            )
+            st.markdown(f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">Renovar suscripción PRO</a>', unsafe_allow_html=True)
+        else:
+            restante = f" ({30 - dias_transcurridos} días de este ciclo)" if dias_transcurridos is not None else ""
+            st.success(f"✅ Suscripción PRO activa{restante}.")
+    else:
+        st.caption(
+            "Esta app es gratuita. Actualiza tu suscripción a la versión PRO para desbloquear "
+            "las funciones de Inteligencia Artificial y los Canales Endémicos."
+        )
+        st.markdown(
+            f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">💎 Actualiza tu suscripción a la versión PRO — 20.000 COP / 6 USD mensuales</a>',
+            unsafe_allow_html=True,
+        )
+
+    st.caption("¿Prefieres apoyar como donación libre en vez de suscripción?")
+    st.markdown(f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">Donar a la Fundación</a>', unsafe_allow_html=True)
 
 
 def seccion_lateral_eventos(usuario_id: str, brote_id: int):
@@ -1667,6 +1895,7 @@ def seccion_analisis_ia_brote(usuario_id: str, brote: dict, serie: list, velocid
 
 def app_principal():
     usuario = st.session_state["usuario"]
+    boton_flotante_soporte()
 
     with st.sidebar:
         barra_lateral_sesion(usuario)
@@ -1680,7 +1909,7 @@ def app_principal():
         st.divider()
         seccion_lateral_admin(usuario["id"])
         st.divider()
-        seccion_lateral_donacion()
+        seccion_lateral_suscripcion(usuario["id"])
 
     st.title(f"EpiScan — {brote['nombre']}")
     st.caption("Sistema de vigilancia epidemiológica")
@@ -1711,9 +1940,9 @@ def app_principal():
 
     dashboard_kpis(serie, velocidad, fase)
 
-    tab_resumen, tab_componentes, tab_geografia, tab_clusters, tab_vias, tab_proyecciones, tab_ia, tab_avanzado = st.tabs(
+    tab_resumen, tab_componentes, tab_geografia, tab_clusters, tab_vias, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
         ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🗺️ Geografía", "🧭 Clusters automáticos",
-         "🦠 Por vía de contagio", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "⚙️ Avanzado"]
+         "🦠 Por vía de contagio", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
     )
 
     with tab_resumen:
@@ -1739,6 +1968,9 @@ def app_principal():
     with tab_ia:
         seccion_analisis_ia_brote(usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)
 
+    with tab_canales:
+        seccion_canales_endemicos(usuario["id"])
+
     with tab_avanzado:
         seccion_comparar_brotes(usuario["id"], brote["id"])
         seccion_historial_cambios(brote["id"])
@@ -1756,6 +1988,7 @@ def app_principal():
 # DASHBOARD PÚBLICO — vista de solo lectura, sin necesidad de login
 # =======================================================================
 def pantalla_dashboard_publico(token: str):
+    boton_flotante_soporte()
     try:
         datos = db.obtener_brote_publico(token)
     except Exception as e:
@@ -1801,4 +2034,17 @@ if _token_publico:
 elif "usuario" not in st.session_state:
     pantalla_login()
 else:
-    app_principal()
+    try:
+        app_principal()
+    except Exception as e:
+        import traceback
+        st.error(
+            "⚠️ Ocurrió un problema inesperado mostrando la app. Esto casi siempre se soluciona "
+            "recargando la página o cerrando e iniciando sesión de nuevo."
+        )
+        if st.button("🔄 Recargar"):
+            st.session_state.clear()
+            st.rerun()
+        with st.expander("Detalle técnico (para reportar el error)"):
+            st.caption(f"{type(e).__name__}: {e}")
+            st.code(traceback.format_exc())

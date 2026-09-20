@@ -129,6 +129,45 @@ def actualizar_plan_usuario_admin(usuario_id: str, plan: str) -> None:
     client.rpc("admin_actualizar_plan_usuario", {"p_usuario_id": usuario_id, "p_plan": plan}).execute()
 
 
+# ---------------------------------------------------------------------
+# Canales endémicos (función PRO)
+# ---------------------------------------------------------------------
+def listar_canales_endemicos(usuario_id: str) -> list[dict]:
+    client = get_client()
+    res = client.table("canales_endemicos").select("*").eq("usuario_id", usuario_id).order("creado_en").execute()
+    return res.data or []
+
+
+def crear_canal_endemico(usuario_id: str, nombre: str) -> dict:
+    client = get_client()
+    res = client.table("canales_endemicos").insert({"usuario_id": usuario_id, "nombre": nombre.strip()}).execute()
+    return res.data[0] if res.data else {}
+
+
+def eliminar_canal_endemico(canal_id: int) -> None:
+    client = get_client()
+    client.table("canales_endemicos").delete().eq("id", canal_id).execute()
+
+
+def obtener_datos_canal(canal_id: int) -> list[dict]:
+    client = get_client()
+    res = client.table("canal_endemico_datos").select("*").eq("canal_id", canal_id).order("anio").order("semana").execute()
+    return res.data or []
+
+
+def guardar_datos_canal(canal_id: int, usuario_id: str, filas: list[dict]) -> None:
+    """`filas`: lista de {'anio': int, 'semana': int, 'casos': int}.
+    Upsert masivo — sobrescribe los valores existentes para el mismo
+    año/semana de este canal."""
+    client = get_client()
+    payload = [
+        {"canal_id": canal_id, "usuario_id": usuario_id, "anio": int(f["anio"]), "semana": int(f["semana"]), "casos": int(f["casos"])}
+        for f in filas
+    ]
+    if payload:
+        client.table("canal_endemico_datos").upsert(payload, on_conflict="canal_id,anio,semana").execute()
+
+
 def recuperar_password(email: str):
     client = get_client()
     return client.auth.reset_password_for_email(email)

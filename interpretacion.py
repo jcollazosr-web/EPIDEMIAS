@@ -15,6 +15,7 @@ PROVEEDORES = {
     "openai": {"etiqueta": "OpenAI (GPT)", "modelo_defecto": "gpt-4o-mini"},
     "google": {"etiqueta": "Google (Gemini)", "modelo_defecto": "gemini-2.0-flash"},
     "deepseek": {"etiqueta": "DeepSeek", "modelo_defecto": "deepseek-chat"},
+    "groq": {"etiqueta": "Groq (Llama)", "modelo_defecto": "llama-3.3-70b-versatile"},
 }
 
 
@@ -44,6 +45,13 @@ def _llamar_ia(prompt: str, api_key: str, proveedor: str, max_tokens: int = 500)
         # se reutiliza el mismo SDK, solo cambiando la URL base.
         import openai
         client = openai.OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+        respuesta = client.chat.completions.create(model=modelo, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}])
+        return respuesta.choices[0].message.content
+
+    elif proveedor == "groq":
+        # Groq también expone una API compatible con el formato de OpenAI.
+        import openai
+        client = openai.OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
         respuesta = client.chat.completions.create(model=modelo, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}])
         return respuesta.choices[0].message.content
 
