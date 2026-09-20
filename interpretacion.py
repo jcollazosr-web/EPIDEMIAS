@@ -15,7 +15,10 @@ PROVEEDORES = {
     "openai": {"etiqueta": "OpenAI (GPT)", "modelo_defecto": "gpt-4o-mini"},
     "google": {"etiqueta": "Google (Gemini)", "modelo_defecto": "gemini-2.0-flash"},
     "deepseek": {"etiqueta": "DeepSeek", "modelo_defecto": "deepseek-chat"},
-    "groq": {"etiqueta": "Groq (Llama)", "modelo_defecto": "llama-3.3-70b-versatile"},
+    # Groq descontinúa modelos con relativamente poco aviso (ver
+    # console.groq.com/docs/deprecations) — si este deja de funcionar,
+    # revisa esa página y actualiza el valor de 'modelo_defecto' aquí.
+    "groq": {"etiqueta": "Groq (inferencia rápida)", "modelo_defecto": "openai/gpt-oss-120b"},
 }
 
 

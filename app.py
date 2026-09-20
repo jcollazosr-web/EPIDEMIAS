@@ -1045,6 +1045,19 @@ def _obtener_proveedor_y_clave_ia() -> tuple:
     return proveedor, api_key
 
 
+def _ejecutar_seguro(func, *args, **kwargs):
+    """Ejecuta el contenido de UNA pestaña de forma aislada: si falla,
+    muestra un aviso solo ahí en vez de tumbar toda la página (y con
+    ella, las demás pestañas y los botones flotantes)."""
+    try:
+        func(*args, **kwargs)
+    except Exception as e:
+        import traceback
+        st.error(f"⚠️ Esta sección tuvo un problema: {type(e).__name__}: {e}")
+        with st.expander("Detalle técnico (para reportar el error)"):
+            st.code(traceback.format_exc())
+
+
 def _mostrar_aviso_ia_pro():
     st.info(
         "🔒 **Funciones de Inteligencia Artificial disponibles en la versión PRO.** "
@@ -1939,6 +1952,7 @@ def app_principal():
     eventos = db.listar_eventos(brote["id"])
 
     dashboard_kpis(serie, velocidad, fase)
+    seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
 
     tab_resumen, tab_componentes, tab_geografia, tab_clusters, tab_vias, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
         ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🗺️ Geografía", "🧭 Clusters automáticos",
@@ -1946,38 +1960,36 @@ def app_principal():
     )
 
     with tab_resumen:
-        dashboard_grafico_principal(serie, usuario_id=usuario["id"], por_via=por_via, eventos=eventos)
+        _ejecutar_seguro(dashboard_grafico_principal, serie, usuario_id=usuario["id"], por_via=por_via, eventos=eventos)
 
     with tab_componentes:
-        dashboard_grafico_componentes(serie, usuario_id=usuario["id"], eventos=eventos)
+        _ejecutar_seguro(dashboard_grafico_componentes, serie, usuario_id=usuario["id"], eventos=eventos)
 
     with tab_geografia:
-        dashboard_mapa(usuario["id"], brote["id"])
-        dashboard_mapa_calor_semanal(serie)
+        _ejecutar_seguro(dashboard_mapa, usuario["id"], brote["id"])
+        _ejecutar_seguro(dashboard_mapa_calor_semanal, serie)
 
     with tab_clusters:
-        seccion_clusters(usuario["id"], brote["id"])
+        _ejecutar_seguro(seccion_clusters, usuario["id"], brote["id"])
 
     with tab_vias:
-        dashboard_comparacion_vias(por_via, usuario_id=usuario["id"])
-        dashboard_tabla_y_export(serie, vista_sel)
+        _ejecutar_seguro(dashboard_comparacion_vias, por_via, usuario_id=usuario["id"])
+        _ejecutar_seguro(dashboard_tabla_y_export, serie, vista_sel)
 
     with tab_proyecciones:
-        seccion_proyeccion(serie, vista_sel, brote["nombre"], tipo_via_actual)
+        _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], tipo_via_actual)
 
     with tab_ia:
-        seccion_analisis_ia_brote(usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)
+        _ejecutar_seguro(seccion_analisis_ia_brote, usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)
 
     with tab_canales:
-        seccion_canales_endemicos(usuario["id"])
+        _ejecutar_seguro(seccion_canales_endemicos, usuario["id"])
 
     with tab_avanzado:
-        seccion_comparar_brotes(usuario["id"], brote["id"])
-        seccion_historial_cambios(brote["id"])
-        seccion_subregistro(serie, tipo_via_actual)
-        seccion_fuentes_externas(usuario["id"], brote["id"], serie)
-
-    seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
+        _ejecutar_seguro(seccion_comparar_brotes, usuario["id"], brote["id"])
+        _ejecutar_seguro(seccion_historial_cambios, brote["id"])
+        _ejecutar_seguro(seccion_subregistro, serie, tipo_via_actual)
+        _ejecutar_seguro(seccion_fuentes_externas, usuario["id"], brote["id"], serie)
 
     conteo_por_via = db.contar_registros_por_via(usuario["id"], brote_id=brote["id"])
     sugerencia = sm.sugerir_modelo(len(registros), conteo_por_via)
