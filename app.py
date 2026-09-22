@@ -228,7 +228,7 @@ def pantalla_login():
 
     with tab_login:
         with st.form("form_login"):
-            email = st.text_input("Correo electrónico")
+            email = st.text_input("Correo electrónico", max_chars=254)
             password = st.text_input("Contraseña", type="password")
             recordar = st.checkbox("Mantener sesión iniciada en este navegador", value=True)
             enviado = st.form_submit_button("Iniciar sesión")
@@ -247,7 +247,7 @@ def pantalla_login():
     with tab_registro:
         st.caption("El registro es abierto y gratuito. Tus datos quedan visibles únicamente para tu propia cuenta.")
         with st.form("form_registro"):
-            email_r = st.text_input("Correo electrónico", key="email_registro")
+            email_r = st.text_input("Correo electrónico", max_chars=254, key="email_registro")
             password_r = st.text_input("Contraseña (mínimo 6 caracteres)", type="password", key="pw_registro")
             password_r2 = st.text_input("Confirmar contraseña", type="password", key="pw_registro_2")
             acepta = st.checkbox("Acepto el tratamiento de mis datos personales (Ley 1581 de 2012)")
@@ -262,7 +262,9 @@ def pantalla_login():
                 st.caption("Documento no disponible en este momento.")
 
         if enviado_r:
-            if password_r != password_r2:
+            if not email_r.strip() or "@" not in email_r or "." not in email_r.split("@")[-1]:
+                st.error("Escribe un correo electrónico válido.")
+            elif password_r != password_r2:
                 st.error("Las contraseñas no coinciden.")
             elif len(password_r) < 6:
                 st.error("La contraseña debe tener al menos 6 caracteres.")
@@ -277,7 +279,7 @@ def pantalla_login():
 
     with tab_recuperar:
         with st.form("form_recuperar"):
-            email_rec = st.text_input("Correo electrónico", key="email_recuperar")
+            email_rec = st.text_input("Correo electrónico", max_chars=254, key="email_recuperar")
             enviado_rec = st.form_submit_button("Enviar enlace de recuperación")
         if enviado_rec:
             try:
