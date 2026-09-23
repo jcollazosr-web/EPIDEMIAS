@@ -746,20 +746,55 @@ def seccion_lateral_admin(usuario_id: str):
 
         st.divider()
         st.markdown("**✉️ Correo (para contactar usuarios)**")
-        st.caption("Usa Resend (resend.com) — crea una cuenta gratis y pega tu clave aquí para poder enviar correos desde el panel de usuarios.")
-        with st.form("form_config_resend"):
-            clave_resend_actual = db.obtener_configuracion("RESEND_API_KEY")
-            nueva_clave_resend = st.text_input(
-                "Clave de Resend", type="password",
-                placeholder="Ya configurada — pega una nueva para reemplazarla" if clave_resend_actual else "re_...",
+        proveedor_correo_actual = db.obtener_configuracion("PROVEEDOR_CORREO") or "resend"
+        proveedor_correo_sel = st.selectbox(
+            "Proveedor de correo", options=["resend", "gmail"],
+            index=["resend", "gmail"].index(proveedor_correo_actual),
+            format_func=lambda p: "Resend (necesita dominio propio para enviar a otros)" if p == "resend" else "Gmail (usa tu propia cuenta, sin dominio)",
+            key="proveedor_correo_sel",
+        )
+
+        if proveedor_correo_sel == "resend":
+            st.caption("Usa Resend (resend.com) — crea una cuenta gratis y pega tu clave aquí.")
+            with st.form("form_config_resend"):
+                clave_resend_actual = db.obtener_configuracion("RESEND_API_KEY")
+                nueva_clave_resend = st.text_input(
+                    "Clave de Resend", type="password",
+                    placeholder="Ya configurada — pega una nueva para reemplazarla" if clave_resend_actual else "re_...",
+                )
+                guardar_resend = st.form_submit_button("Guardar")
+            if guardar_resend:
+                try:
+                    db.guardar_configuracion_admin("PROVEEDOR_CORREO", "resend")
+                    if nueva_clave_resend.strip():
+                        db.guardar_configuracion_admin("RESEND_API_KEY", nueva_clave_resend.strip())
+                    st.success("Configuración guardada.")
+                except Exception as e:
+                    st.error(f"No se pudo guardar: {e}")
+        else:
+            st.caption(
+                "Usa tu propia cuenta de Gmail. Necesitas una **contraseña de aplicación** (no tu contraseña "
+                "normal) — actívala en myaccount.google.com/apppasswords (requiere verificación en 2 pasos activada)."
             )
-            guardar_resend = st.form_submit_button("Guardar clave de Resend")
-        if guardar_resend and nueva_clave_resend.strip():
-            try:
-                db.guardar_configuracion_admin("RESEND_API_KEY", nueva_clave_resend.strip())
-                st.success("Clave de Resend guardada.")
-            except Exception as e:
-                st.error(f"No se pudo guardar: {e}")
+            with st.form("form_config_gmail"):
+                gmail_direccion_actual = db.obtener_configuracion("GMAIL_DIRECCION")
+                nueva_gmail_direccion = st.text_input("Tu correo de Gmail", value=gmail_direccion_actual or "")
+                gmail_password_actual = db.obtener_configuracion("GMAIL_APP_PASSWORD")
+                nueva_gmail_password = st.text_input(
+                    "Contraseña de aplicación (16 caracteres)", type="password",
+                    placeholder="Ya configurada — pega una nueva para reemplazarla" if gmail_password_actual else "xxxx xxxx xxxx xxxx",
+                )
+                guardar_gmail = st.form_submit_button("Guardar")
+            if guardar_gmail:
+                try:
+                    db.guardar_configuracion_admin("PROVEEDOR_CORREO", "gmail")
+                    if nueva_gmail_direccion.strip():
+                        db.guardar_configuracion_admin("GMAIL_DIRECCION", nueva_gmail_direccion.strip())
+                    if nueva_gmail_password.strip():
+                        db.guardar_configuracion_admin("GMAIL_APP_PASSWORD", nueva_gmail_password.strip().replace(" ", ""))
+                    st.success("Configuración guardada.")
+                except Exception as e:
+                    st.error(f"No se pudo guardar: {e}")
 
         st.divider()
         st.markdown("**📱 WhatsApp saliente (avisos de nuevos registros + reportes de campo)**")
@@ -825,10 +860,10 @@ def seccion_lateral_admin(usuario_id: str):
                 )
                 enviar_masivo = st.form_submit_button(f"Enviar a los {len(usuarios_sin_datos)} usuarios sin datos")
             if enviar_masivo:
-                clave_resend = db.obtener_configuracion("RESEND_API_KEY")
+                config_correo = _config_correo_actual()
                 enviados, fallidos = 0, 0
                 for u_sin_datos in usuarios_sin_datos:
-                    resultado_envio = correo.enviar_correo(u_sin_datos["email"], asunto_masivo, cuerpo_masivo, clave_resend)
+                    resultado_envio = correo.enviar_correo(u_sin_datos["email"], asunto_masivo, cuerpo_masivo, config_correo)
                     enviados += resultado_envio["valido"]
                     fallidos += not resultado_envio["valido"]
                 st.success(f"{enviados} enviados, {fallidos} fallidos.")
@@ -890,8 +925,8 @@ def seccion_lateral_admin(usuario_id: str):
                     cuerpo_ind = st.text_area("Mensaje (admite HTML simple)", key=f"cuerpo_{u['usuario_id']}")
                     enviar_ind = st.form_submit_button(f"Enviar a {u['email']}")
                 if enviar_ind:
-                    clave_resend = db.obtener_configuracion("RESEND_API_KEY")
-                    resultado_envio = correo.enviar_correo(u["email"], asunto_ind, cuerpo_ind, clave_resend)
+                    config_correo = _config_correo_actual()
+                    resultado_envio = correo.enviar_correo(u["email"], asunto_ind, cuerpo_ind, config_correo)
                     if resultado_envio["valido"]:
                         st.success("Correo enviado.")
                         st.session_state[f"mostrar_correo_{u['usuario_id']}"] = False
@@ -1336,6 +1371,18 @@ def _detectar_clusters_cached(ubicaciones: list, radio_km: float):
     """La detección de clusters es O(n²) — con muchas ubicaciones únicas
     conviene no recalcularla en cada interacción de la página."""
     return clusters.detectar_clusters(ubicaciones, radio_km=radio_km)
+
+
+def _config_correo_actual() -> dict:
+    """Arma la configuración de correo (Resend o Gmail) leída de
+    configuracion_global, lista para pasarle a correo.enviar_correo()."""
+    proveedor = db.obtener_configuracion("PROVEEDOR_CORREO") or "resend"
+    return {
+        "proveedor": proveedor,
+        "resend_api_key": db.obtener_configuracion("RESEND_API_KEY"),
+        "gmail_direccion": db.obtener_configuracion("GMAIL_DIRECCION"),
+        "gmail_app_password": db.obtener_configuracion("GMAIL_APP_PASSWORD"),
+    }
 
 
 def _ejecutar_seguro(func, *args, **kwargs):

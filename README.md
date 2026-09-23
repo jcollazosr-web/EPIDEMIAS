@@ -362,6 +362,12 @@ o ubicación) sigue restringida al dueño del catálogo.
   ahora extendida con este comando. Probado de extremo a extremo
   (disparador → función → respuesta) en la base de datos real.
 
+- **Gmail como alternativa a Resend** para enviar correos (`correo.py`
+  generalizado): Resend, en su plan gratis, solo deja enviar a tu propio
+  correo hasta verificar un dominio — Gmail (con contraseña de
+  aplicación) permite enviar a cualquier destinatario sin necesitar
+  dominio propio. Selector de proveedor en el panel de administrador.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
