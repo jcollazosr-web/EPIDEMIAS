@@ -1731,7 +1731,7 @@ def dashboard_tabla_y_export(serie: list, nombre_serie: str):
         )
 
 
-def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, usuario_id: str, tipo_via: str = None):
+def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, tipo_via: str = None):
     st.markdown("#### Proyección a futuro")
     n_dias_disponibles = len([r for r in serie if r.get("casos_activos") is not None])
     opciones_modelo = ["Regresión log-lineal (±2σ)"]
@@ -1779,7 +1779,8 @@ def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, usuari
             mime="application/pdf",
         )
 
-    st.divider()
+
+def seccion_simulador_intervenciones(serie: list, usuario_id: str):
     st.markdown("#### 🎛️ Simulador de intervenciones — \"¿Qué pasaría si...?\"")
     if not db.tiene_ia_habilitada(usuario_id):
         _mostrar_aviso_ia_pro()
@@ -1789,38 +1790,45 @@ def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, usuari
         "vacunación, distanciamiento) reduce la transmisión en cierto porcentaje. Es una "
         "herramienta de orden de magnitud para comparar decisiones, no una predicción exacta."
     )
-    reduccion_pct = st.slider("Reducción de transmisión con la intervención (%)", min_value=0, max_value=90, value=30, step=5, key=f"reduccion_{nombre_serie}")
-    dias_sim = st.slider("Días a simular", min_value=3, max_value=30, value=14, key=f"dias_sim_{nombre_serie}")
+    reduccion_pct = st.slider("Reducción de transmisión con la intervención (%)", min_value=0, max_value=90, value=30, step=5, key="reduccion_sim")
+    dias_sim = st.slider("Días a simular", min_value=3, max_value=30, value=14, key="dias_sim")
 
     resultado_sim = proyecciones.simular_intervencion(serie, reduccion_pct, dias_sim)
     if not resultado_sim["valido"]:
         st.warning(resultado_sim["mensaje"])
-    else:
-        try:
-            import plotly.graph_objects as go
+        return
 
-            fechas_sim = [pd.to_datetime(p["fecha"]) for p in resultado_sim["proyeccion_base"]]
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_base"]],
-                name="Sin intervención", line=dict(color="red", width=2, dash="dot"),
-            ))
-            fig.add_trace(go.Scatter(
-                x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_intervencion"]],
-                name=f"Con intervención (-{reduccion_pct}%)", line=dict(color=COLOR_VIOLETA, width=3),
-                fill="tonexty", fillcolor="rgba(158,51,178,0.1)",
-            ))
-            fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
-                               legend=dict(orientation="h", yanchor="bottom", y=1.02))
-            st.plotly_chart(fig, use_container_width=True)
-        except ImportError:
-            pass
+    try:
+        import plotly.graph_objects as go
 
-        st.caption(resultado_sim["mensaje"])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Sin intervención", f"{resultado_sim['valor_final_base']:.0f} casos")
-        c2.metric("Con intervención", f"{resultado_sim['valor_final_intervencion']:.0f} casos")
-        c3.metric("Casos evitados (estimado)", f"{resultado_sim['casos_evitados_estimados']:.0f}")
+        fechas_sim = [pd.to_datetime(p["fecha"]) for p in resultado_sim["proyeccion_base"]]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_base"]],
+            name="Sin intervención", line=dict(color="red", width=2, dash="dot"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_intervencion"]],
+            name=f"Con intervención (-{reduccion_pct}%)", line=dict(color=COLOR_VIOLETA, width=3),
+            fill="tonexty", fillcolor="rgba(158,51,178,0.1)",
+        ))
+        fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        pass
+
+    st.caption(resultado_sim["mensaje"])
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Sin intervención", f"{resultado_sim['valor_final_base']:.0f} casos")
+    c2.metric("Con intervención", f"{resultado_sim['valor_final_intervencion']:.0f} casos")
+    c3.metric("Casos evitados (estimado)", f"{resultado_sim['casos_evitados_estimados']:.0f}")
+
+    resumen_ia = (
+        f"Simulación de intervención: reducción de transmisión del {reduccion_pct}% durante {dias_sim} días. "
+        f"{resultado_sim['mensaje']}"
+    )
+    _boton_analisis_descriptivo("Simulador de intervenciones", resumen_ia, key="simulador", usuario_id=usuario_id)
 
 
 def _mostrar_tabla_componentes_proyectados(tabla_combinada: list):
@@ -2416,9 +2424,10 @@ def app_principal():
     dashboard_kpis(serie, velocidad, fase)
     seccion_chatbot_interpretacion(usuario["id"], serie, velocidad, fase, brote["nombre"], vista_sel)
 
-    tab_resumen, tab_componentes, tab_clusters, tab_geografia, tab_vias, tab_subregistro, tab_proyecciones, tab_ia, tab_canales, tab_avanzado = st.tabs(
+    tab_resumen, tab_componentes, tab_clusters, tab_geografia, tab_vias, tab_subregistro, tab_proyecciones, tab_simulador, tab_ia, tab_canales, tab_avanzado = st.tabs(
         ["📊 Resumen", "💉 Activos, recuperados y fallecidos", "🧭 Clusters automáticos", "🗺️ Geografía",
-         "🦠 Por vía de contagio", "🔬 Subregistro", "🔮 Proyecciones", "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
+         "🦠 Por vía de contagio", "🔬 Subregistro", "🔮 Proyecciones", "🎛️ Simulador de intervenciones",
+         "🤖 Análisis del brote con IA", "📈 Canales Endémicos", "⚙️ Avanzado"]
     )
 
     with tab_resumen:
@@ -2442,7 +2451,10 @@ def app_principal():
         _ejecutar_seguro(seccion_subregistro, serie, tipo_via_actual)
 
     with tab_proyecciones:
-        _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], usuario["id"], tipo_via_actual)
+        _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], tipo_via_actual)
+
+    with tab_simulador:
+        _ejecutar_seguro(seccion_simulador_intervenciones, serie, usuario["id"])
 
     with tab_ia:
         _ejecutar_seguro(seccion_analisis_ia_brote, usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)
