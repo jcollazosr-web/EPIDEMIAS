@@ -29,6 +29,8 @@ import reportes
 import fuentes_externas
 import interpretacion
 import canal_endemico
+import correo
+import whatsapp
 import geografia
 import clusters
 import sugerencia_modelos as sm
@@ -218,7 +220,8 @@ def pantalla_login():
                 "- 🗺️ Mapa geográfico de casos\n"
                 "- 🤖 Análisis del brote con Inteligencia Artificial\n"
                 "- 📈 Canales Endémicos (comparación histórica por semana epidemiológica)\n"
-                "- 🌐 Conexión a fuentes de datos externas (Socrata, APIs)"
+                "- 🌐 Conexión a fuentes de datos externas (Socrata, APIs)\n"
+                "- 📱 Reportar casos por WhatsApp sin abrir la app"
             )
 
     st.write("")
@@ -742,6 +745,52 @@ def seccion_lateral_admin(usuario_id: str):
                 st.error(f"No se pudo guardar: {e}")
 
         st.divider()
+        st.markdown("**✉️ Correo (para contactar usuarios)**")
+        st.caption("Usa Resend (resend.com) — crea una cuenta gratis y pega tu clave aquí para poder enviar correos desde el panel de usuarios.")
+        with st.form("form_config_resend"):
+            clave_resend_actual = db.obtener_configuracion("RESEND_API_KEY")
+            nueva_clave_resend = st.text_input(
+                "Clave de Resend", type="password",
+                placeholder="Ya configurada — pega una nueva para reemplazarla" if clave_resend_actual else "re_...",
+            )
+            guardar_resend = st.form_submit_button("Guardar clave de Resend")
+        if guardar_resend and nueva_clave_resend.strip():
+            try:
+                db.guardar_configuracion_admin("RESEND_API_KEY", nueva_clave_resend.strip())
+                st.success("Clave de Resend guardada.")
+            except Exception as e:
+                st.error(f"No se pudo guardar: {e}")
+
+        st.divider()
+        st.markdown("**📱 WhatsApp saliente (avisos de nuevos registros + reportes de campo)**")
+        st.caption("Usa Twilio (twilio.com) — crea una cuenta y activa el Sandbox de WhatsApp para empezar gratis.")
+        with st.form("form_config_twilio"):
+            sid_actual = db.obtener_configuracion("TWILIO_ACCOUNT_SID")
+            nuevo_sid = st.text_input("Account SID de Twilio", value=sid_actual or "", placeholder="AC...")
+            token_actual = db.obtener_configuracion("TWILIO_AUTH_TOKEN")
+            nuevo_token = st.text_input("Auth Token de Twilio", type="password", placeholder="Ya configurado — pega uno nuevo para reemplazarlo" if token_actual else "")
+            numero_actual = db.obtener_configuracion("TWILIO_NUMERO_ORIGEN")
+            nuevo_numero = st.text_input("Número de WhatsApp de Twilio (con indicativo)", value=numero_actual or "+14155238886", help="El sandbox de Twilio usa +14155238886 por defecto.")
+            admin_numero_actual = db.obtener_configuracion("ADMIN_WHATSAPP_NOTIFICACIONES")
+            nuevo_admin_numero = st.text_input("Tu número (recibe los avisos de nuevos registros)", value=admin_numero_actual or "+573113682907")
+            guardar_twilio = st.form_submit_button("Guardar configuración de Twilio")
+        if guardar_twilio:
+            try:
+                if nuevo_sid.strip():
+                    db.guardar_configuracion_admin("TWILIO_ACCOUNT_SID", nuevo_sid.strip())
+                if nuevo_token.strip():
+                    db.guardar_configuracion_admin("TWILIO_AUTH_TOKEN", nuevo_token.strip())
+                db.guardar_configuracion_admin("TWILIO_NUMERO_ORIGEN", nuevo_numero.strip())
+                db.guardar_configuracion_admin("ADMIN_WHATSAPP_NOTIFICACIONES", nuevo_admin_numero.strip())
+                st.success("Configuración de Twilio guardada.")
+            except Exception as e:
+                st.error(f"No se pudo guardar: {e}")
+        st.caption(
+            "💡 Para administrar el plan de un usuario respondiendo por WhatsApp, escribe desde TU número "
+            "(el de arriba) el mensaje: `PRO correo@ejemplo.com` o `GRATIS correo@ejemplo.com`."
+        )
+
+        st.divider()
 
         try:
             stats = db.estadisticas_globales_admin()
@@ -763,8 +812,32 @@ def seccion_lateral_admin(usuario_id: str):
             st.error(f"No se pudo obtener la lista de usuarios: {e}")
             return
 
+        st.markdown("**📣 Recordatorio masivo**")
+        usuarios_sin_datos = [u for u in usuarios if u.get("total_registros", 0) == 0]
+        if usuarios_sin_datos:
+            with st.form("form_recordatorio_masivo"):
+                st.caption(f"{len(usuarios_sin_datos)} usuario(s) todavía no han cargado ningún dato.")
+                asunto_masivo = st.text_input("Asunto", value="¿Necesitas ayuda para empezar en EpiScan?")
+                cuerpo_masivo = st.text_area(
+                    "Mensaje (admite HTML simple)",
+                    value="<p>Hola,</p><p>Notamos que aún no has registrado ningún caso en EpiScan. "
+                          "¿Te gustaría ayuda para empezar? Responde este correo o usa el botón de Soporte en la app.</p>",
+                )
+                enviar_masivo = st.form_submit_button(f"Enviar a los {len(usuarios_sin_datos)} usuarios sin datos")
+            if enviar_masivo:
+                clave_resend = db.obtener_configuracion("RESEND_API_KEY")
+                enviados, fallidos = 0, 0
+                for u_sin_datos in usuarios_sin_datos:
+                    resultado_envio = correo.enviar_correo(u_sin_datos["email"], asunto_masivo, cuerpo_masivo, clave_resend)
+                    enviados += resultado_envio["valido"]
+                    fallidos += not resultado_envio["valido"]
+                st.success(f"{enviados} enviados, {fallidos} fallidos.")
+        else:
+            st.caption("Todos tus usuarios ya tienen datos cargados.")
+
+        st.divider()
         for u in usuarios:
-            cu1, cu2, cu3 = st.columns([3, 1.3, 1])
+            cu1, cu2, cu3, cu4 = st.columns([3, 1.3, 0.7, 0.7])
             plan_actual = u.get("plan", "gratis")
 
             dias_pro = None
@@ -781,6 +854,18 @@ def seccion_lateral_admin(usuario_id: str):
 
             cu1.caption(f"{u['email']} — {'✅ confirmado' if u['confirmado'] else '⏳ sin confirmar'}{estado_pro}")
 
+            ultimo_acceso_txt = "nunca ha iniciado sesión"
+            if u.get("ultimo_acceso"):
+                try:
+                    fecha_acceso = pd.to_datetime(u["ultimo_acceso"], utc=True).tz_localize(None)
+                    dias_desde_acceso = (pd.Timestamp.now() - fecha_acceso).days
+                    ultimo_acceso_txt = "hoy" if dias_desde_acceso == 0 else f"hace {dias_desde_acceso} día(s)"
+                except Exception:
+                    pass
+            total_registros = u.get("total_registros", 0)
+            tiene_datos = "📊 con datos" if total_registros > 0 else "📭 sin datos cargados"
+            cu1.caption(f"Último acceso: {ultimo_acceso_txt} — {u.get('total_brotes', 0)} brote(s), {total_registros} registro(s) ({tiene_datos})")
+
             nuevo_plan = cu2.selectbox(
                 "Plan", options=["gratis", "pro"], index=["gratis", "pro"].index(plan_actual),
                 key=f"plan_sel_{u['usuario_id']}", label_visibility="collapsed",
@@ -793,8 +878,25 @@ def seccion_lateral_admin(usuario_id: str):
                     st.error(f"No se pudo actualizar el plan: {e}")
 
             if u["usuario_id"] != usuario_id:  # no permitir auto-eliminarse desde aquí
-                if cu3.button("🗑️", key=f"del_usuario_{u['usuario_id']}"):
+                if cu4.button("🗑️", key=f"del_usuario_{u['usuario_id']}"):
                     st.session_state[f"confirmar_del_{u['usuario_id']}"] = True
+
+            if cu3.button("✉️", key=f"correo_usuario_{u['usuario_id']}", help="Enviar correo a este usuario"):
+                st.session_state[f"mostrar_correo_{u['usuario_id']}"] = not st.session_state.get(f"mostrar_correo_{u['usuario_id']}", False)
+
+            if st.session_state.get(f"mostrar_correo_{u['usuario_id']}"):
+                with st.form(f"form_correo_{u['usuario_id']}"):
+                    asunto_ind = st.text_input("Asunto", key=f"asunto_{u['usuario_id']}")
+                    cuerpo_ind = st.text_area("Mensaje (admite HTML simple)", key=f"cuerpo_{u['usuario_id']}")
+                    enviar_ind = st.form_submit_button(f"Enviar a {u['email']}")
+                if enviar_ind:
+                    clave_resend = db.obtener_configuracion("RESEND_API_KEY")
+                    resultado_envio = correo.enviar_correo(u["email"], asunto_ind, cuerpo_ind, clave_resend)
+                    if resultado_envio["valido"]:
+                        st.success("Correo enviado.")
+                        st.session_state[f"mostrar_correo_{u['usuario_id']}"] = False
+                    else:
+                        st.error(resultado_envio["mensaje"])
 
             if st.session_state.get(f"confirmar_del_{u['usuario_id']}"):
                 st.warning(f"¿Eliminar a {u['email']} y TODOS sus brotes/registros? No se puede deshacer.")
@@ -1082,6 +1184,37 @@ def seccion_lateral_suscripcion(usuario_id: str):
 
     st.caption("¿Prefieres apoyar como donación libre en vez de suscripción?")
     st.markdown(f'<a class="boton-donar" href="{LINK_DONACION}" target="_blank">Donar a la Fundación</a>', unsafe_allow_html=True)
+
+
+def seccion_lateral_whatsapp(usuario_id: str, brote: dict):
+    with st.expander("📱 Reportar casos por WhatsApp"):
+        if not db.tiene_ia_habilitada(usuario_id):
+            _mostrar_aviso_ia_pro()
+            return
+        st.caption(
+            "Configura tu número para poder reportar casos nuevos mandando un simple mensaje de "
+            "WhatsApp (ej. '5'), sin necesidad de abrir la app. Varios mensajes el mismo día se "
+            "SUMAN (no se reemplazan). Función en construcción — requiere que el administrador "
+            "termine de configurar la integración con Twilio."
+        )
+        perfil = db.obtener_perfil(usuario_id)
+        vias = db.listar_vias(brote["usuario_id"])
+        nombres_vias = {v["nombre"]: v["id"] for v in vias}
+
+        telefono_actual = perfil.get("telefono_whatsapp") or ""
+        via_actual_id = perfil.get("via_whatsapp_defecto")
+        via_actual_nombre = next((n for n, i in nombres_vias.items() if i == via_actual_id), list(nombres_vias.keys())[0] if nombres_vias else None)
+
+        with st.form("form_whatsapp_config"):
+            telefono = st.text_input("Tu número de WhatsApp (con indicativo, ej. +573001234567)", value=telefono_actual)
+            via_sel = st.selectbox("Vía de contagio a usar en los reportes por WhatsApp", options=list(nombres_vias.keys()),
+                                    index=list(nombres_vias.keys()).index(via_actual_nombre) if via_actual_nombre in nombres_vias else 0)
+            st.caption(f"Los reportes por WhatsApp se guardarán en el brote activo actual: **{brote['nombre']}**.")
+            guardar_whatsapp = st.form_submit_button("Guardar configuración")
+
+        if guardar_whatsapp:
+            db.actualizar_config_whatsapp(usuario_id, telefono.strip(), brote["id"], nombres_vias.get(via_sel))
+            st.success("Configuración guardada.")
 
 
 def seccion_lateral_eventos(usuario_id: str, brote_id: int):
@@ -1551,7 +1684,7 @@ def dashboard_tabla_y_export(serie: list, nombre_serie: str):
         )
 
 
-def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, tipo_via: str = None):
+def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, usuario_id: str, tipo_via: str = None):
     st.markdown("#### Proyección a futuro")
     n_dias_disponibles = len([r for r in serie if r.get("casos_activos") is not None])
     opciones_modelo = ["Regresión log-lineal (±2σ)"]
@@ -1598,6 +1731,49 @@ def seccion_proyeccion(serie: list, nombre_serie: str, brote_nombre: str, tipo_v
             file_name=f"reporte_{brote_nombre}_{date.today().isoformat()}.pdf",
             mime="application/pdf",
         )
+
+    st.divider()
+    st.markdown("#### 🎛️ Simulador de intervenciones — \"¿Qué pasaría si...?\"")
+    if not db.tiene_ia_habilitada(usuario_id):
+        _mostrar_aviso_ia_pro()
+        return
+    st.caption(
+        "Compara la curva actual contra la que resultaría si una intervención (cuarentena, "
+        "vacunación, distanciamiento) reduce la transmisión en cierto porcentaje. Es una "
+        "herramienta de orden de magnitud para comparar decisiones, no una predicción exacta."
+    )
+    reduccion_pct = st.slider("Reducción de transmisión con la intervención (%)", min_value=0, max_value=90, value=30, step=5, key=f"reduccion_{nombre_serie}")
+    dias_sim = st.slider("Días a simular", min_value=3, max_value=30, value=14, key=f"dias_sim_{nombre_serie}")
+
+    resultado_sim = proyecciones.simular_intervencion(serie, reduccion_pct, dias_sim)
+    if not resultado_sim["valido"]:
+        st.warning(resultado_sim["mensaje"])
+    else:
+        try:
+            import plotly.graph_objects as go
+
+            fechas_sim = [pd.to_datetime(p["fecha"]) for p in resultado_sim["proyeccion_base"]]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_base"]],
+                name="Sin intervención", line=dict(color="red", width=2, dash="dot"),
+            ))
+            fig.add_trace(go.Scatter(
+                x=fechas_sim, y=[p["valor"] for p in resultado_sim["proyeccion_intervencion"]],
+                name=f"Con intervención (-{reduccion_pct}%)", line=dict(color=COLOR_VIOLETA, width=3),
+                fill="tonexty", fillcolor="rgba(158,51,178,0.1)",
+            ))
+            fig.update_layout(height=350, margin=dict(l=10, r=10, t=20, b=10), hovermode="x unified",
+                               legend=dict(orientation="h", yanchor="bottom", y=1.02))
+            st.plotly_chart(fig, use_container_width=True)
+        except ImportError:
+            pass
+
+        st.caption(resultado_sim["mensaje"])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Sin intervención", f"{resultado_sim['valor_final_base']:.0f} casos")
+        c2.metric("Con intervención", f"{resultado_sim['valor_final_intervencion']:.0f} casos")
+        c3.metric("Casos evitados (estimado)", f"{resultado_sim['casos_evitados_estimados']:.0f}")
 
 
 def _mostrar_tabla_componentes_proyectados(tabla_combinada: list):
@@ -2145,6 +2321,7 @@ def app_principal():
         seccion_lateral_carga_masiva(usuario["id"], brote)
         seccion_lateral_editar_eliminar(usuario["id"], brote)
         seccion_lateral_eventos(usuario["id"], brote["id"])
+        seccion_lateral_whatsapp(usuario["id"], brote)
         st.divider()
         seccion_lateral_admin(usuario["id"])
         st.divider()
@@ -2218,7 +2395,7 @@ def app_principal():
         _ejecutar_seguro(seccion_subregistro, serie, tipo_via_actual)
 
     with tab_proyecciones:
-        _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], tipo_via_actual)
+        _ejecutar_seguro(seccion_proyeccion, serie, vista_sel, brote["nombre"], usuario["id"], tipo_via_actual)
 
     with tab_ia:
         _ejecutar_seguro(seccion_analisis_ia_brote, usuario["id"], brote, serie, velocidad, fase, por_via, vista_sel, tipo_via_actual)

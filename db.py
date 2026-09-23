@@ -107,6 +107,17 @@ def obtener_perfil(usuario_id: str) -> dict:
     return res.data[0] if res.data else {}
 
 
+def actualizar_config_whatsapp(usuario_id: str, telefono: str, brote_id: int, via_id: int) -> None:
+    """Configura el número de WhatsApp y el brote/vía por defecto para
+    reportar casos por mensaje (ver Edge Function whatsapp-webhook)."""
+    client = get_client()
+    client.table("perfiles").update({
+        "telefono_whatsapp": telefono or None,
+        "brote_whatsapp_defecto": brote_id,
+        "via_whatsapp_defecto": via_id,
+    }).eq("usuario_id", usuario_id).execute()
+
+
 def es_admin(usuario_id: str) -> bool:
     perfil = obtener_perfil(usuario_id)
     return perfil.get("rol") == "admin"

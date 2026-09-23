@@ -448,3 +448,66 @@ def estimar_infectados_no_diagnosticados(
             "cifras oficiales."
         ),
     }
+
+
+def simular_intervencion(serie: list, reduccion_transmision_pct: float, dias_futuros: int = 14) -> dict:
+    """
+    Simula el efecto de una intervención (cuarentena, vacunación,
+    distanciamiento, etc.) que reduce la tasa de transmisión actual en
+    un porcentaje dado, comparando dos curvas desde el último dato real:
+    "si nada cambia" vs. "con la intervención".
+
+    Es una simplificación DELIBERADAMENTE transparente: toma la tasa de
+    crecimiento (r) ya observada y la reduce proporcionalmente al %
+    indicado, proyectando ambas curvas con crecimiento exponencial desde
+    el último valor real. No modela retardos de la intervención,
+    cobertura poblacional, ni una reducción de R0 con su mecanismo
+    epidemiológico completo (para eso están los modelos SIR/logístico) —
+    es una herramienta de ORDEN DE MAGNITUD para comparar decisiones,
+    no un pronóstico de precisión clínica.
+    """
+    if not serie:
+        return {"valido": False, "mensaje": "No hay datos suficientes."}
+
+    velocidad = calculos.tasa_crecimiento_y_duplicacion(serie)
+    r_base = velocidad["tasa_r"]
+    if r_base is None:
+        return {"valido": False, "mensaje": "No hay suficientes datos para calcular la tasa de crecimiento actual (se necesitan al menos unos días de historia)."}
+
+    if not (0 <= reduccion_transmision_pct <= 100):
+        return {"valido": False, "mensaje": "La reducción debe estar entre 0% y 100%."}
+
+    r_intervencion = r_base * (1 - reduccion_transmision_pct / 100)
+
+    ultimo = serie[-1]
+    valor_inicial = ultimo["casos_activos"]
+    fecha_inicial = calculos._to_fecha(ultimo["fecha"])
+
+    proyeccion_base, proyeccion_intervencion = [], []
+    for i in range(1, dias_futuros + 1):
+        fecha_i = fecha_inicial + timedelta(days=i)
+        proyeccion_base.append({"fecha": fecha_i.isoformat(), "valor": valor_inicial * math.exp(r_base * i)})
+        proyeccion_intervencion.append({"fecha": fecha_i.isoformat(), "valor": valor_inicial * math.exp(r_intervencion * i)})
+
+    valor_final_base = proyeccion_base[-1]["valor"]
+    valor_final_intervencion = proyeccion_intervencion[-1]["valor"]
+    casos_evitados = max(0.0, valor_final_base - valor_final_intervencion)
+
+    return {
+        "valido": True,
+        "r_base": r_base,
+        "r_intervencion": r_intervencion,
+        "reduccion_pct": reduccion_transmision_pct,
+        "dias_futuros": dias_futuros,
+        "valor_inicial": valor_inicial,
+        "proyeccion_base": proyeccion_base,
+        "proyeccion_intervencion": proyeccion_intervencion,
+        "valor_final_base": valor_final_base,
+        "valor_final_intervencion": valor_final_intervencion,
+        "casos_evitados_estimados": casos_evitados,
+        "mensaje": (
+            f"Con una reducción del {reduccion_transmision_pct:.0f}% en la transmisión, en {dias_futuros} días "
+            f"se estiman {valor_final_intervencion:.0f} casos activos en vez de {valor_final_base:.0f} sin "
+            f"intervención — una diferencia de ~{casos_evitados:.0f} casos."
+        ),
+    }

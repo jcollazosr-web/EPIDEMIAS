@@ -751,3 +751,84 @@ create policy "pagos_bold_select_admin" on pagos_bold_procesados for select
 -- URL: https://ztvwvlokqeuwqnuraslx.supabase.co/functions/v1/bold-webhook
 -- Requiere configurar el secret BOLD_WEBHOOK_SECRET en el panel de
 -- Supabase (Edge Functions > bold-webhook > Secrets).
+
+-- =========================================================================
+-- MIGRACIÓN: admin_listar_usuarios ahora incluye último acceso y datos cargados
+-- =========================================================================
+drop function if exists admin_listar_usuarios();
+create or replace function admin_listar_usuarios()
+returns table(
+    usuario_id uuid, email text, creado_en timestamptz, confirmado boolean,
+    plan text, plan_actualizado_en timestamptz,
+    ultimo_acceso timestamptz, total_brotes bigint, total_registros bigint
+)
+language plpgsql security definer set search_path = public, auth as $$
+begin
+    if not exists (select 1 from perfiles p where p.usuario_id = auth.uid() and p.rol = 'admin') then
+        raise exception 'No autorizado: se requiere rol admin';
+    end if;
+    return query
+    select
+        u.id, u.email::text, u.created_at, (u.email_confirmed_at is not null),
+        coalesce(pf.plan, 'gratis'), pf.plan_actualizado_en, u.last_sign_in_at,
+        coalesce(b.total_brotes, 0), coalesce(r.total_registros, 0)
+    from auth.users u
+    left join perfiles pf on pf.usuario_id = u.id
+    left join (select brotes.usuario_id as uid, count(*) as total_brotes from brotes group by brotes.usuario_id) b on b.uid = u.id
+    left join (select registros_diarios.usuario_id as uid, count(*) as total_registros from registros_diarios group by registros_diarios.usuario_id) r on r.uid = u.id
+    order by u.created_at;
+end;
+$$;
+grant execute on function admin_listar_usuarios() to authenticated;
+
+-- =========================================================================
+-- MIGRACIÓN: Reportes de casos por WhatsApp (función PRO)
+-- =========================================================================
+alter table perfiles add column if not exists telefono_whatsapp text unique;
+alter table perfiles add column if not exists brote_whatsapp_defecto bigint references brotes(id) on delete set null;
+alter table perfiles add column if not exists via_whatsapp_defecto bigint references vias_contagio(id) on delete set null;
+
+create table if not exists reportes_whatsapp_log (
+    id           bigint generated always as identity primary key,
+    telefono     text,
+    usuario_id   uuid references auth.users(id),
+    mensaje_recibido text,
+    resultado    text not null check (resultado in ('registrado', 'sin_reconocer', 'error_formato', 'error')),
+    detalle      text,
+    recibido_en  timestamptz default now()
+);
+alter table reportes_whatsapp_log enable row level security;
+create policy "whatsapp_log_select_admin" on reportes_whatsapp_log for select
+    using (exists (select 1 from perfiles where usuario_id = auth.uid() and rol = 'admin'));
+
+-- La Edge Function 'whatsapp-webhook' (ver supabase_functions/whatsapp-webhook/index.ts)
+-- recibe mensajes de WhatsApp vía Twilio, verifica su firma, y registra
+-- casos nuevos (acumulando varios mensajes del mismo día).
+-- URL: https://ztvwvlokqeuwqnuraslx.supabase.co/functions/v1/whatsapp-webhook
+-- Requiere configurar el secret TWILIO_AUTH_TOKEN en Supabase, y
+-- registrar esa URL como webhook de mensajes entrantes en Twilio.
+
+-- =========================================================================
+-- MIGRACIÓN: Aviso por WhatsApp al admin de cada registro nuevo +
+-- administración de plan (PRO/GRATIS) respondiendo por WhatsApp
+-- =========================================================================
+create extension if not exists pg_net;
+
+create or replace function crear_perfil_para_nuevo_usuario()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+    insert into public.perfiles (usuario_id) values (new.id);
+    perform net.http_post(
+        url := 'https://ztvwvlokqeuwqnuraslx.supabase.co/functions/v1/notificar-registro',
+        headers := jsonb_build_object('Content-Type', 'application/json'),
+        body := jsonb_build_object('email', new.email)
+    );
+    return new;
+end;
+$$;
+
+-- Edge Functions nuevas:
+--   notificar-registro   -> https://ztvwvlokqeuwqnuraslx.supabase.co/functions/v1/notificar-registro
+--     (invocada por el trigger de arriba, lee Twilio de configuracion_global, avisa al admin)
+--   whatsapp-webhook (extendida) -> reconoce comandos "PRO correo@x.com" / "GRATIS correo@x.com"
+--     si vienen del número guardado en configuracion_global.ADMIN_WHATSAPP_NOTIFICACIONES

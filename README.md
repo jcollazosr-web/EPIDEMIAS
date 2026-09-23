@@ -335,6 +335,33 @@ o ubicación) sigue restringida al dueño del catálogo.
 - **Comparación Gratis/PRO del login actualizada** con los cambios de
   este lote.
 
+- **Envío de correos desde el panel de administrador** (`correo.py`,
+  vía Resend): último acceso y datos cargados por usuario en la lista
+  de administrador, botón ✉️ para escribirle a un usuario individual,
+  y un recordatorio masivo con un clic para todos los que todavía no
+  han cargado ningún dato.
+
+- **🎛️ Simulador de intervenciones**: en la pestaña de Proyecciones,
+  compara la curva "sin intervención" contra la que resultaría con una
+  reducción de transmisión dada (cuarentena, vacunación, etc.) — con
+  slider interactivo y estimación de casos evitados.
+- **📱 Reportar casos por WhatsApp** (función PRO): nueva Edge Function
+  `whatsapp-webhook` que recibe mensajes por WhatsApp (vía Twilio),
+  verifica su firma, y registra casos nuevos automáticamente (varios
+  mensajes el mismo día se SUMAN). El usuario configura su número y
+  vía por defecto desde la barra lateral. Requiere que el admin
+  configure Twilio (pendiente de completar por el usuario).
+
+- **Aviso por WhatsApp de cada registro nuevo + administración de plan
+  por WhatsApp**: un disparador en la base de datos (`pg_net`) avisa a
+  una nueva Edge Function (`notificar-registro`) cada vez que alguien
+  se registra, que le escribe al admin por WhatsApp (vía Twilio). El
+  admin puede responder `PRO correo@x.com` o `GRATIS correo@x.com`
+  desde su propio número para activar/desactivar el plan sin abrir la
+  app — reconocido por la función `whatsapp-webhook` ya existente,
+  ahora extendida con este comando. Probado de extremo a extremo
+  (disparador → función → respuesta) en la base de datos real.
+
 ## Estado actual de los modelos predictivos
 
 - ✅ Regresión log-lineal con banda ±2σ
