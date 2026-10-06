@@ -14,14 +14,23 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+          url="$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]')"
+          url="${url%/}"
+          key="$(printf '%s' "$SUPABASE_ANON_KEY" | tr -d '[:space:]')"
+
+          if [ -z "$url" ] || [ -z "$key" ]; then
             echo "Faltan los secrets SUPABASE_URL y/o SUPABASE_ANON_KEY"
             exit 1
           fi
-          respuesta=$(curl --silent --show-error --fail --max-time 30 \
-            -X POST "$SUPABASE_URL/rest/v1/rpc/keep_alive" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+
+          codigo=$(curl --silent --show-error --max-time 30 \
+            -o respuesta.txt -w '%{http_code}' \
+            -X POST "$url/rest/v1/rpc/keep_alive" \
+            -H "apikey: $key" \
+            -H "Authorization: Bearer $key" \
             -H "Content-Type: application/json" \
             -d '{}')
-          echo "Supabase respondió: $respuesta"
+
+          echo "HTTP $codigo - Supabase respondió: $(cat respuesta.txt)"
+
+          [ "$codigo" -ge 200 ] && [ "$codigo" -lt 300 ]
