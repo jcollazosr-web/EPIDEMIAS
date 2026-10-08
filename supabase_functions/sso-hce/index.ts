@@ -3,7 +3,7 @@
 // La HCE abre EpiScan con ?sso=<pase>. EpiScan le envía el pase a esta función, que:
 //   1. verifica la firma HMAC-SHA256 con el secreto compartido (tabla privada sso_secreto, sin políticas RLS: solo
 //      la lee la service_role; o la variable SSO_HCE_SECRET),
-//   2. revisa que no esté vencido y que no se haya usado antes (tabla sso_nonces),
+//   2. revisa que no esté vencido y que no se haya usado más de MAX_USOS veces (tabla sso_nonces),
 //   3. crea la cuenta de EpiScan si el correo aún no existe (confirmada),
 //   4. genera un enlace mágico y devuelve SOLO su token_hash; EpiScan lo canjea con verify_otp para abrir la
 //      sesión del usuario (con RLS normal). La service_role key nunca sale del servidor de Supabase.
@@ -18,6 +18,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const enc = new TextEncoder();
 let SECRETO = Deno.env.get("SSO_HCE_SECRET") || "";
+const MAX_USOS = 5;   // cargas permitidas de un mismo pase (en sus 10 minutos de vigencia)
 
 function respuesta(cuerpo: unknown, status = 200) {
   return new Response(JSON.stringify(cuerpo), { status, headers: { "Content-Type": "application/json" } });
@@ -75,9 +76,12 @@ Deno.serve(async (req: Request) => {
   }
   if (!datos.exp || datos.exp * 1000 < Date.now()) return respuesta({ error: "El pase de ingreso venció." }, 401);
 
-  // Un solo uso por pase
-  const { error: errorNonce } = await supabase.from("sso_nonces").insert({ nonce: String(datos.nonce).slice(0, 80) });
-  if (errorNonce) return respuesta({ error: "Este pase de ingreso ya se usó." }, 401);
+  // Usos limitados por pase, dentro de su vigencia: Streamlit Cloud a veces carga EpiScan dos veces (al despertar la
+  // app o al recargar el marco) y el segundo intento debe entrar igual. Pasado el límite, el pase ya no sirve.
+  const { data: usos, error: errorNonce } = await supabase.rpc("sso_usar_nonce",
+    { p_nonce: String(datos.nonce).slice(0, 80) });
+  if (errorNonce || typeof usos !== "number") return respuesta({ error: "No se pudo validar el pase." }, 500);
+  if (usos > (datos.accion === "crear" ? 1 : MAX_USOS)) return respuesta({ error: "Este pase de ingreso ya se usó." }, 401);
   await supabase.from("sso_nonces").delete().lt("usado_en", new Date(Date.now() - 2 * 86400000).toISOString());
 
   // Crear la cuenta si no existe (ya confirmada: la persona viene autenticada por la HCE)

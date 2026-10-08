@@ -2524,8 +2524,15 @@ if _pase_sso:
         import sso
         _usuario_sso, _motivo_sso = sso.ingresar(_pase_sso)
         if _usuario_sso:
+            _tokens_sso = _usuario_sso.pop("_tokens", None)
             st.session_state["usuario"] = _usuario_sso
             st.session_state["_ingreso_desde_hce"] = True
+            if _tokens_sso:     # si el marco se recarga, la sesión se restaura desde la cookie sin pedir clave
+                try:
+                    cookie_manager.set("access_token", _tokens_sso[0], key="set_access_token_sso")
+                    cookie_manager.set("refresh_token", _tokens_sso[1], key="set_refresh_token_sso")
+                except Exception:
+                    pass
         else:
             st.session_state["_aviso_sso"] = _motivo_sso
     try:

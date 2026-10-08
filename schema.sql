@@ -840,8 +840,10 @@ $$;
 -- =========================================================================
 create table if not exists sso_nonces (
     nonce    text primary key,
-    usado_en timestamptz not null default now()
+    usado_en timestamptz not null default now(),
+    usos     integer not null default 1
 );
+alter table sso_nonces add column if not exists usos integer not null default 1;
 alter table sso_nonces enable row level security;
 create table if not exists sso_secreto (
     clave text primary key,
@@ -849,5 +851,14 @@ create table if not exists sso_secreto (
 );
 alter table sso_secreto enable row level security;
 revoke all on sso_nonces, sso_secreto from anon, authenticated;
+-- Cuenta los usos de un pase de forma atómica (la función sso-hce rechaza pasado el límite)
+create or replace function sso_usar_nonce(p_nonce text) returns integer
+language sql security definer set search_path = public as $$
+  insert into sso_nonces(nonce) values (p_nonce)
+  on conflict (nonce) do update set usos = sso_nonces.usos + 1
+  returning usos;
+$$;
+revoke all on function sso_usar_nonce(text) from public, anon, authenticated;
+grant execute on function sso_usar_nonce(text) to service_role;
 -- El secreto compartido se inserta una vez (el mismo que guarda la HCE en su tabla secretos, clave «episcan_sso»):
 --   insert into sso_secreto (clave, valor) values ('hce', '<64 caracteres hexadecimales>');

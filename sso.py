@@ -47,4 +47,5 @@ def ingresar(pase: str) -> tuple[dict | None, str]:
     if not respuesta or not respuesta.session:
         return None, "No se pudo abrir la sesión de EpiScan."
     db.set_auth_session(respuesta.session.access_token, respuesta.session.refresh_token)
-    return {"id": respuesta.user.id, "email": respuesta.user.email}, ""
+    return {"id": respuesta.user.id, "email": respuesta.user.email,
+            "_tokens": (respuesta.session.access_token, respuesta.session.refresh_token)}, ""
