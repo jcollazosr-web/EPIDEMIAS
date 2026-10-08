@@ -1,0 +1,48 @@
+# Mantiene despiertas las apps de Streamlit Community Cloud (se duermen tras ~12 h sin visitas).
+# Cada 6 horas abre cada app en un navegador real (una petición simple no cuenta como visita) y, si está
+# dormida, pulsa «Yes, get this app back up!». También se puede lanzar a mano en Actions → Run workflow.
+name: Mantener despiertas las apps
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  visitar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar navegador
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: Visitar las apps
+        shell: python
+        run: |
+          import re
+          from playwright.sync_api import sync_playwright
+
+          APPS = ["https://epidemias-jmcr.streamlit.app/", "https://historiasclinicasfjcr.streamlit.app/"]
+          with sync_playwright() as p:
+              navegador = p.chromium.launch()
+              for url in APPS:
+                  pagina = navegador.new_page()
+                  try:
+                      pagina.goto(url, timeout=90_000)
+                      pagina.wait_for_timeout(10_000)
+                      boton = pagina.get_by_role("button", name=re.compile("get this app back up", re.I))
+                      if boton.count():
+                          boton.first.click()
+                          pagina.wait_for_timeout(90_000)
+                          print(f"{url}: estaba dormida, se despertó")
+                      else:
+                          print(f"{url}: despierta")
+                  except Exception as e:
+                      print(f"{url}: no se pudo visitar ({e})")
+                  finally:
+                      pagina.close()
+              navegador.close()
