@@ -2365,7 +2365,15 @@ def seccion_analisis_ia_brote(usuario_id: str, brote: dict, serie: list, velocid
 
 def app_principal():
     usuario = st.session_state["usuario"]
-    boton_flotante_soporte()
+    modo_hce = st.session_state.get("_modo_hce", False)
+    if modo_hce:
+        # Dentro de la historia clínica: sin encabezado propio ni botón flotante (la HCE ya tiene los suyos)
+        st.markdown("""<style>
+            .block-container {padding-top: 1rem !important;}
+            header[data-testid="stHeader"], div[data-testid="stToolbar"] {display: none !important;}
+            </style>""", unsafe_allow_html=True)
+    else:
+        boton_flotante_soporte()
 
     with st.sidebar:
         barra_lateral_sesion(usuario)
@@ -2382,8 +2390,11 @@ def app_principal():
         st.divider()
         seccion_lateral_suscripcion(usuario["id"])
 
-    st.title(f"EpiScan — {brote['nombre']}")
-    st.caption("Sistema de vigilancia epidemiológica")
+    if modo_hce:
+        st.subheader(brote["nombre"])
+    else:
+        st.title(f"EpiScan — {brote['nombre']}")
+        st.caption("Sistema de vigilancia epidemiológica")
     if brote.get("descripcion"):
         st.caption(brote["descripcion"])
 
@@ -2517,6 +2528,8 @@ def pantalla_dashboard_publico(token: str):
 _parametros_url = st.query_params
 _token_publico = _parametros_url.get("token_publico")
 _pase_sso = _parametros_url.get("sso")
+if _parametros_url.get("hce") == "1":
+    st.session_state["_modo_hce"] = True     # abierta dentro de la historia clínica: modo compacto
 
 if _pase_sso:
     # Ingreso único desde la Historia Clínica Electrónica: el pase es de un solo uso, así que se retira de la URL

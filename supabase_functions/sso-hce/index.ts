@@ -8,7 +8,13 @@
 //   4. genera un enlace mágico y devuelve SOLO su token_hash; EpiScan lo canjea con verify_otp para abrir la
 //      sesión del usuario (con RLS normal). La service_role key nunca sale del servidor de Supabase.
 //
-// Con accion:"crear" solo crea la cuenta (sin sesión): la HCE lo usa al registrar un usuario o su correo.
+// Otras acciones (de un solo uso), que la HCE firma con el mismo secreto:
+//   crear        -> solo crea la cuenta (al registrar un usuario o su correo en la HCE)
+//   desactivar   -> bloquea la cuenta y cierra sus sesiones (usuario desactivado o eliminado en la HCE)
+//   activar      -> la desbloquea
+//   salir        -> cierra las sesiones de la cuenta (cerró sesión en la HCE)
+//   sincronizar  -> reemplaza los conteos diarios de los brotes «HCE · …» (datos agregados, sin datos personales)
+//   resumen      -> casos diarios recientes de los brotes de la cuenta (avisos en el Inicio de la HCE)
 // Pase: base64url(JSON {email, nombre, exp, nonce, iss:"hce", accion?}) + "." + hex(HMAC-SHA256(parte1, secreto)).
 // Desplegar con verify_jwt = false: la autenticidad la da la firma del pase.
 
@@ -18,6 +24,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const enc = new TextEncoder();
 let SECRETO = Deno.env.get("SSO_HCE_SECRET") || "";
+const ACCIONES = ["crear", "desactivar", "activar", "salir", "sincronizar", "resumen"];
 const MAX_USOS = 5;   // cargas permitidas de un mismo pase (en sus 10 minutos de vigencia)
 
 function respuesta(cuerpo: unknown, status = 200) {
@@ -64,7 +71,10 @@ Deno.serve(async (req: Request) => {
     return respuesta({ error: "Pase de ingreso inválido." }, 401);
   }
 
-  let datos: { email?: string; nombre?: string; exp?: number; nonce?: string; iss?: string; accion?: string };
+  let datos: {
+    email?: string; nombre?: string; exp?: number; nonce?: string; iss?: string; accion?: string;
+    desde?: string; hasta?: string; brotes?: string[]; filas?: unknown[]; dias?: number;
+  };
   try {
     datos = JSON.parse(base64urlATexto(parte));
   } catch {
@@ -75,14 +85,36 @@ Deno.serve(async (req: Request) => {
     return respuesta({ error: "Pase de ingreso inválido." }, 401);
   }
   if (!datos.exp || datos.exp * 1000 < Date.now()) return respuesta({ error: "El pase de ingreso venció." }, 401);
+  if (datos.accion && !ACCIONES.includes(datos.accion)) return respuesta({ error: "Acción no permitida." }, 400);
 
   // Usos limitados por pase, dentro de su vigencia: Streamlit Cloud a veces carga EpiScan dos veces (al despertar la
   // app o al recargar el marco) y el segundo intento debe entrar igual. Pasado el límite, el pase ya no sirve.
   const { data: usos, error: errorNonce } = await supabase.rpc("sso_usar_nonce",
     { p_nonce: String(datos.nonce).slice(0, 80) });
   if (errorNonce || typeof usos !== "number") return respuesta({ error: "No se pudo validar el pase." }, 500);
-  if (usos > (datos.accion === "crear" ? 1 : MAX_USOS)) return respuesta({ error: "Este pase de ingreso ya se usó." }, 401);
+  if (usos > (datos.accion ? 1 : MAX_USOS)) return respuesta({ error: "Este pase de ingreso ya se usó." }, 401);
   await supabase.from("sso_nonces").delete().lt("usado_en", new Date(Date.now() - 2 * 86400000).toISOString());
+
+  // Acciones sobre una cuenta existente (no la crean)
+  if (datos.accion === "desactivar" || datos.accion === "activar" || datos.accion === "salir") {
+    const { data: uid } = await supabase.rpc("sso_id_por_correo", { p_email: email });
+    if (!uid) return respuesta({ ok: true, existe: false });
+    if (datos.accion !== "salir") {
+      const { error: e } = await supabase.auth.admin.updateUserById(uid as string,
+        { ban_duration: datos.accion === "desactivar" ? "876000h" : "none" });
+      if (e) return respuesta({ error: "No se pudo cambiar el estado de la cuenta." }, 500);
+    }
+    if (datos.accion !== "activar") await supabase.rpc("sso_cerrar_sesiones", { p_uid: uid });
+    return respuesta({ ok: true, existe: true });
+  }
+  if (datos.accion === "resumen") {
+    const { data: uid } = await supabase.rpc("sso_id_por_correo", { p_email: email });
+    if (!uid) return respuesta({ brotes: [] });
+    const { data: brotes, error: e } = await supabase.rpc("sso_resumen_hce",
+      { p_uid: uid, p_dias: Math.min(Math.max(Number(datos.dias) || 56, 7), 400) });
+    if (e) return respuesta({ error: "No se pudo leer EpiScan." }, 500);
+    return respuesta({ brotes });
+  }
 
   // Crear la cuenta si no existe (ya confirmada: la persona viene autenticada por la HCE)
   const { data: creado, error: errorCrear } = await supabase.auth.admin.createUser({
@@ -95,6 +127,14 @@ Deno.serve(async (req: Request) => {
   if (!errorCrear && creado?.user?.id) {
     await supabase.from("perfiles").update({ nombre_completo: datos.nombre || null })
       .eq("usuario_id", creado.user.id).is("nombre_completo", null);
+  }
+  if (datos.accion === "sincronizar") {
+    const { data: uid } = await supabase.rpc("sso_id_por_correo", { p_email: email });
+    const { data: r, error: e } = await supabase.rpc("sso_sincronizar_hce", {
+      p_uid: uid, p_desde: datos.desde, p_hasta: datos.hasta, p_brotes: datos.brotes || [], p_filas: datos.filas || [],
+    });
+    if (e) return respuesta({ error: "No se pudieron guardar los conteos en EpiScan." }, 500);
+    return respuesta({ ok: true, ...(r as object) });
   }
   // Solo crear la cuenta (la HCE la crea al registrar el usuario o su correo), sin abrir sesión
   if (datos.accion === "crear") return respuesta({ creada: !errorCrear, email });

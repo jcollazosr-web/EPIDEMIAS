@@ -862,3 +862,8 @@ revoke all on function sso_usar_nonce(text) from public, anon, authenticated;
 grant execute on function sso_usar_nonce(text) to service_role;
 -- El secreto compartido se inserta una vez (el mismo que guarda la HCE en su tabla secretos, clave «episcan_sso»):
 --   insert into sso_secreto (clave, valor) values ('hce', '<64 caracteres hexadecimales>');
+
+-- =========================================================================
+-- MIGRACIÓN 2026-10-08: unión HCE ↔ EpiScan (seguridad de perfiles/plan/claves de IA y funciones del puente
+-- sso_id_por_correo, sso_cerrar_sesiones, sso_sincronizar_hce, sso_resumen_hce). Ver migraciones/2026-10-08_union_hce.sql
+-- =========================================================================
