@@ -117,3 +117,14 @@ revoke all on function public.sso_id_por_correo(text), public.sso_cerrar_sesione
   from public, anon, authenticated;
 grant execute on function public.sso_id_por_correo(text), public.sso_cerrar_sesiones(uuid),
   public.sso_sincronizar_hce(uuid, date, date, text[], jsonb), public.sso_resumen_hce(uuid, integer) to service_role;
+
+-- 5. Corrección para todos los usuarios de EpiScan: una restricción antigua impedía registrar casos de DOS brotes
+--    distintos con la misma fecha, vía y ubicación. Queda solo la que incluye el brote.
+alter table registros_diarios drop constraint if exists registros_diarios_usuario_id_fecha_via_contagio_id_ubicacio_key;
+drop index if exists registros_diarios_usuario_id_fecha_via_contagio_id_ubicacio_key;
+
+-- 6. Comprobación: debe mostrar 4 funciones del puente y 2 políticas de perfiles.
+select 'funciones del puente' as que, count(*) as cuantas from pg_proc
+ where proname in ('sso_id_por_correo','sso_cerrar_sesiones','sso_sincronizar_hce','sso_resumen_hce')
+union all
+select 'políticas de perfiles', count(*) from pg_policies where tablename = 'perfiles';
