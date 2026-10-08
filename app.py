@@ -2516,6 +2516,27 @@ def pantalla_dashboard_publico(token: str):
 # ---------------------------------------------------------------------
 _parametros_url = st.query_params
 _token_publico = _parametros_url.get("token_publico")
+_pase_sso = _parametros_url.get("sso")
+
+if _pase_sso:
+    # Ingreso único desde la Historia Clínica Electrónica: el pase es de un solo uso, así que se retira de la URL
+    if "usuario" not in st.session_state:
+        import sso
+        _usuario_sso, _motivo_sso = sso.ingresar(_pase_sso)
+        if _usuario_sso:
+            st.session_state["usuario"] = _usuario_sso
+            st.session_state["_ingreso_desde_hce"] = True
+        else:
+            st.session_state["_aviso_sso"] = _motivo_sso
+    try:
+        del st.query_params["sso"]
+    except KeyError:
+        pass
+    st.rerun()
+
+if st.session_state.get("_aviso_sso") and "usuario" not in st.session_state:
+    st.warning(f"No fue posible el ingreso automático desde la historia clínica ({st.session_state.pop('_aviso_sso')}). "
+               "Ingrese con su correo y contraseña.")
 
 if _token_publico:
     pantalla_dashboard_publico(_token_publico)

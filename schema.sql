@@ -832,3 +832,22 @@ $$;
 --     (invocada por el trigger de arriba, lee Twilio de configuracion_global, avisa al admin)
 --   whatsapp-webhook (extendida) -> reconoce comandos "PRO correo@x.com" / "GRATIS correo@x.com"
 --     si vienen del número guardado en configuracion_global.ADMIN_WHATSAPP_NOTIFICACIONES
+
+
+-- =========================================================================
+-- MIGRACIÓN: Ingreso único desde la Historia Clínica Electrónica (función sso-hce)
+-- Tablas privadas: RLS activo y SIN políticas, solo las usa la service_role desde la función.
+-- =========================================================================
+create table if not exists sso_nonces (
+    nonce    text primary key,
+    usado_en timestamptz not null default now()
+);
+alter table sso_nonces enable row level security;
+create table if not exists sso_secreto (
+    clave text primary key,
+    valor text not null
+);
+alter table sso_secreto enable row level security;
+revoke all on sso_nonces, sso_secreto from anon, authenticated;
+-- El secreto compartido se inserta una vez (el mismo que guarda la HCE en su tabla secretos, clave «episcan_sso»):
+--   insert into sso_secreto (clave, valor) values ('hce', '<64 caracteres hexadecimales>');
