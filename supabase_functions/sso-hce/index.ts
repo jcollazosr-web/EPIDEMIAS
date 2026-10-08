@@ -139,6 +139,15 @@ Deno.serve(async (req: Request) => {
   // Solo crear la cuenta (la HCE la crea al registrar el usuario o su correo), sin abrir sesión
   if (datos.accion === "crear") return respuesta({ creada: !errorCrear, email });
 
+  // Cuenta bloqueada (usuario desactivado o eliminado en la HCE): no se abre sesión
+  const idCuenta = creado?.user?.id || (await supabase.rpc("sso_id_por_correo", { p_email: email })).data;
+  if (idCuenta) {
+    const { data: cuenta } = await supabase.auth.admin.getUserById(idCuenta as string);
+    const hasta = (cuenta?.user as { banned_until?: string } | undefined)?.banned_until;
+    if (hasta && new Date(hasta).getTime() > Date.now()) {
+      return respuesta({ error: "Su cuenta de EpiScan está desactivada. Hable con el administrador." }, 403);
+    }
+  }
   const { data, error } = await supabase.auth.admin.generateLink({ type: "magiclink", email });
   if (error || !data?.properties?.hashed_token) {
     return respuesta({ error: "No se pudo iniciar la sesión." }, 500);
