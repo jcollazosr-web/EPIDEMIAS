@@ -8,7 +8,8 @@
 //   4. genera un enlace mágico y devuelve SOLO su token_hash; EpiScan lo canjea con verify_otp para abrir la
 //      sesión del usuario (con RLS normal). La service_role key nunca sale del servidor de Supabase.
 //
-// Pase: base64url(JSON {email, nombre, exp, nonce, iss:"hce"}) + "." + hex(HMAC-SHA256(parte1, secreto)).
+// Con accion:"crear" solo crea la cuenta (sin sesión): la HCE lo usa al registrar un usuario o su correo.
+// Pase: base64url(JSON {email, nombre, exp, nonce, iss:"hce", accion?}) + "." + hex(HMAC-SHA256(parte1, secreto)).
 // Desplegar con verify_jwt = false: la autenticidad la da la firma del pase.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -62,7 +63,7 @@ Deno.serve(async (req: Request) => {
     return respuesta({ error: "Pase de ingreso inválido." }, 401);
   }
 
-  let datos: { email?: string; nombre?: string; exp?: number; nonce?: string; iss?: string };
+  let datos: { email?: string; nombre?: string; exp?: number; nonce?: string; iss?: string; accion?: string };
   try {
     datos = JSON.parse(base64urlATexto(parte));
   } catch {
@@ -86,6 +87,8 @@ Deno.serve(async (req: Request) => {
   if (errorCrear && !/already|registered|exists/i.test(errorCrear.message)) {
     return respuesta({ error: "No se pudo preparar la cuenta de EpiScan." }, 500);
   }
+  // Solo crear la cuenta (la HCE la crea al registrar el usuario o su correo), sin abrir sesión
+  if (datos.accion === "crear") return respuesta({ creada: !errorCrear, email });
 
   const { data, error } = await supabase.auth.admin.generateLink({ type: "magiclink", email });
   if (error || !data?.properties?.hashed_token) {
