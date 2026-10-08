@@ -85,11 +85,16 @@ Deno.serve(async (req: Request) => {
   await supabase.from("sso_nonces").delete().lt("usado_en", new Date(Date.now() - 2 * 86400000).toISOString());
 
   // Crear la cuenta si no existe (ya confirmada: la persona viene autenticada por la HCE)
-  const { error: errorCrear } = await supabase.auth.admin.createUser({
+  const { data: creado, error: errorCrear } = await supabase.auth.admin.createUser({
     email, email_confirm: true, user_metadata: { nombre: datos.nombre || "", origen: "hce" },
   });
   if (errorCrear && !/already|registered|exists/i.test(errorCrear.message)) {
     return respuesta({ error: "No se pudo preparar la cuenta de EpiScan." }, 500);
+  }
+  // Cuenta nueva: rol general («usuario», el de defecto; los administradores se asignan a mano en EpiScan) y su nombre
+  if (!errorCrear && creado?.user?.id) {
+    await supabase.from("perfiles").update({ nombre_completo: datos.nombre || null })
+      .eq("usuario_id", creado.user.id).is("nombre_completo", null);
   }
   // Solo crear la cuenta (la HCE la crea al registrar el usuario o su correo), sin abrir sesión
   if (datos.accion === "crear") return respuesta({ creada: !errorCrear, email });
